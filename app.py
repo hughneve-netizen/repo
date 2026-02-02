@@ -38,7 +38,7 @@ try:
         
         # Display latest value as a big metric
         latest_val = df["reading_value"].iloc[-1]
-        st.metric(label="Latest Reading", value=f"{latest_val} Units")
+        st.metric(label="Latest Reading", value=f"{latest_val} cm")
     else:
         st.info("Connected to Supabase, but no data found in the table yet.")
 
