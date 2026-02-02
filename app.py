@@ -20,6 +20,7 @@ try:
     
     if rows:
         import pandas as pd
+        query = conn.table("sensor_data").select("*").execute(ttl=10)
         df = pd.DataFrame(rows)
         
         # Convert timestamp to datetime for better plotting
