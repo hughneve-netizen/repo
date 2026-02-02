@@ -13,7 +13,7 @@ def get_data():
     query = conn.table("sensor_data").select("timestamp, reading_value").execute()
     return query.data
 
-st.title("📈 Real-Time Cloud Sensor Feed")
+st.title("📈 Nant Cledlyn Depth, Drefach")
 
 try:
     rows = get_data()
@@ -28,8 +28,8 @@ try:
         # 3. Create Plotly Chart
         fig = px.line(
             df, 
-            x="timestamp", 
-            y="reading_value", 
+            x="Date and Time", 
+            y="Approximate depth", 
             title="Interactive Sensor Data",
             template="plotly_dark"
         )
@@ -38,7 +38,7 @@ try:
         
         # Display latest value as a big metric
         latest_val = df["reading_value"].iloc[-1]
-        st.metric(label="Latest Reading", value=f"{latest_val} Units")
+        st.metric(label="Latest Reading", value=f"{latest_val} cm")
     else:
         st.info("Connected to Supabase, but no data found in the table yet.")
 
