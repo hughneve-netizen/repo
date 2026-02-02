@@ -4,83 +4,64 @@ import plotly.express as px
 from st_supabase_connection import SupabaseConnection
 import time
 
-# 1. Page Configuration
-st.set_page_config(
-    page_title="Live Sensor Dashboard",
-    page_icon="📡",
-    layout="wide"
-)
+st.set_page_config(page_title="Sensor Dashboard", layout="wide")
 
-st.title("📡 Real-Time Sensor Data Feed")
-st.markdown("Fetching live data from Supabase Cloud Storage")
+# 1. Force a "Clear Cache" button in the sidebar if it gets stuck again
+if st.sidebar.button("Hard Refresh Cache"):
+    st.cache_data.clear()
+
+st.title("📡 Live Sensor Data Feed")
 
 # 2. Initialize Connection
-# This looks for SUPABASE_URL and SUPABASE_KEY in your secrets.toml
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# 3. Cached Data Fetching
-# The 'ttl' ensures the app doesn't stay stuck on old data
+# 3. Aggressive Fetching
 @st.cache_data(ttl=10)
 def fetch_data():
-    try:
-        # Fetching all columns from your 'sensor_data' table
-        response = conn.table("sensor_data").select("*").execute()
-        df = pd.DataFrame(response.data)
+    # Adding a limit or specific sort here can help the database response
+    response = conn.table("sensor_data").select("*").execute()
+    df = pd.DataFrame(response.data)
+    
+    if not df.empty:
+        # Convert to datetime
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
         
-        if not df.empty:
-            # Convert timestamp and sort to fix the 'zigzag' / looping issue
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-            df = df.sort_values(by="timestamp")
-            return df
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
-        return pd.DataFrame()
+        # FIX FOR "TWICE" DATA: Remove exact duplicates if they exist
+        df = df.drop_duplicates(subset=['timestamp', 'reading_value'])
+        
+        # Sort so the line draws correctly
+        df = df.sort_values(by="timestamp")
+        return df
+    return pd.DataFrame()
 
 # 4. Main App Logic
 df = fetch_data()
 
 if not df.empty:
-    # Top Row Metrics
-    col1, col2 = st.columns(2)
-    latest_val = df["reading_value"].iloc[-1]
-    latest_time = df["timestamp"].iloc[-1].strftime('%Y-%m-%d %H:%M:%S')
+    # Diagnostic: Show the last time the DB was actually queried
+    st.caption(f"Database last queried at: {time.strftime('%H:%M:%S')}")
     
-    col1.metric("Latest Reading", f"{latest_val} units")
-    col2.metric("Last Updated", latest_time)
-
-    # 5. Interactive Plotly Chart
+    # 5. The Chart
+    # Use 'sensor_name' as color to prevent multiple lines from merging
+    # If you only have one sensor, this ensures one clean line.
     fig = px.line(
         df, 
         x="timestamp", 
-        y="reading_value", 
-        title="Sensor History (Zoomable)",
-        markers=True,
-        template="plotly_dark"
+        y="reading_value",
+        title="Live Sensor Readings",
+        template="plotly_dark",
+        color="sensor_name" # This separates data into distinct lines
     )
 
-    # Add Zoom/Pan Tools and Range Slider
-    fig.update_layout(
-        xaxis=dict(
-            rangeslider=dict(visible=True), # Allows "All Data" navigation
-            type="date"
-        ),
-        yaxis=dict(autorange=True),
-        dragmode="zoom",
-        hovermode="x unified"
-    )
-
+    fig.update_layout(xaxis=dict(rangeslider=dict(visible=True)))
     st.plotly_chart(fig, use_container_width=True)
 
-    # Optional: Data Table
-    with st.expander("View Raw Data Table"):
-        st.dataframe(df.sort_values(by="timestamp", ascending=False))
+    # Diagnostic: Check the very last 3 rows
+    st.write("Latest rows in memory:", df.tail(3))
 
 else:
-    st.info("Waiting for data... Ensure your sensor is uploading to Supabase.")
+    st.info("No data found. Check Supabase connection.")
 
-# 6. Auto-Refresh Logic
-# This forces the browser to refresh the script every 10 seconds
-st.empty()
+# 6. Rerun Logic
 time.sleep(10)
 st.rerun()
