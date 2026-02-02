@@ -28,8 +28,8 @@ try:
         # 3. Create Plotly Chart
         fig = px.line(
             df, 
-            x="Date and Time", 
-            y="Approximate depth", 
+            x="timestamp", 
+            y="reading_value", 
             title="Interactive Sensor Data",
             template="plotly_dark"
         )
@@ -38,7 +38,7 @@ try:
         
         # Display latest value as a big metric
         latest_val = df["reading_value"].iloc[-1]
-        st.metric(label="Latest Reading", value=f"{latest_val} cm")
+        st.metric(label="Latest Reading", value=f"{latest_val} Units")
     else:
         st.info("Connected to Supabase, but no data found in the table yet.")
 
