@@ -24,6 +24,7 @@ try:
         
         # Convert timestamp to datetime for better plotting
         df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.sort_values(by="timestamp")
         st.write(f"Last successful fetch: {pd.to_datetime('now')}")
         # 3. Create Plotly Chart
         fig = px.line(
