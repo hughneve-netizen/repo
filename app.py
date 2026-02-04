@@ -12,7 +12,7 @@ st.sidebar.header("Settings")
 view_all = st.sidebar.checkbox("View All Data", value=False)
 refresh_rate = st.sidebar.slider("Refresh Rate (seconds)", 5, 60, 10)
 
-st.title("📡 Live Sensor Data & Statistical Analysis")
+st.title("📡 Nant Cledlyn Depth, Drefach: Data & Statistical Analysis")
 
 conn = st.connection("supabase", type=SupabaseConnection)
 
