@@ -5,15 +5,19 @@ from st_supabase_connection import SupabaseConnection
 import time
 
 # 1. Page Configuration
-st.set_page_config(page_title="Sensor Monitor Pro", layout="wide")
+st.set_page_config(
+    page_title="Sensor Monitor Pro",
+    page_icon="📡",
+    layout="wide"
+)
 
 # 2. Sidebar Controls
-st.sidebar.header("🎛️ Settings")
+st.sidebar.header("🎛️ Dashboard Controls")
 window_size = st.sidebar.slider("Trend Smoothing (Window)", 1, 100, 20)
 view_all = st.sidebar.checkbox("View All History", value=False)
 refresh_rate = st.sidebar.slider("Refresh Rate (sec)", 5, 60, 10)
 
-if st.sidebar.button("Reset Cache"):
+if st.sidebar.button("🗑️ Clear Cache"):
     st.cache_data.clear()
     st.rerun()
 
@@ -22,35 +26,39 @@ st.title("📡 Live Sensor Analytics")
 # 3. Database Connection
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# 4. Data Fetching & Processing
+# 4. Data Fetching & Logic
 @st.cache_data(ttl=refresh_rate)
 def fetch_data(show_all):
     try:
+        # Build query
         query = conn.table("sensor_data").select("*").order("timestamp", desc=True)
         if not show_all:
             query = query.limit(500)
-        
+            
         response = query.execute()
         df = pd.DataFrame(response.data)
         
         if not df.empty:
-            # Force Types
+            # Type enforcement
             df["timestamp"] = pd.to_datetime(df["timestamp"])
             df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
-            df = df.dropna(subset=['reading_value']).sort_values(by="timestamp")
             
-            # MATH 1: Rolling Average
+            # Remove NaNs and sort for time-series flow
+            df = df.dropna(subset=['reading_value'])
+            df = df.sort_values(by="timestamp")
+            
+            # MATH: Rolling Average
             df["rolling_avg"] = df["reading_value"].rolling(window=window_size, min_periods=1).mean()
             
-            # MATH 2: Rate of Change (Velocity)
-            # Calculated as change in value per second
+            # MATH: Rate of Change (Velocity)
+            # Change in units per second
             time_diff = df["timestamp"].diff().dt.total_seconds()
             df["rate_of_change"] = df["rolling_avg"].diff() / time_diff
             
             return df
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Database Error: {e}")
         return pd.DataFrame()
 
 # 5. Build UI
@@ -58,19 +66,13 @@ df = fetch_data(view_all)
 
 if not df.empty:
     # Logic for Trend Indicators
-    latest_velocity = df["rate_of_change"].iloc[-1]
+    latest_velocity = df["rate_of_change"].iloc[-1] if not df["rate_of_change"].empty else 0
     if latest_velocity > 0.005:
-        trend_label = "Rising"
-        trend_icon = "📈"
-        trend_color = "normal" # Green in Streamlit
+        trend_label, trend_icon, trend_color = "Rising", "📈", "normal"
     elif latest_velocity < -0.005:
-        trend_label = "Falling"
-        trend_icon = "📉"
-        trend_color = "inverse" # Red in Streamlit
+        trend_label, trend_icon, trend_color = "Falling", "📉", "inverse"
     else:
-        trend_label = "Stable"
-        trend_icon = "➡️"
-        trend_color = "off"
+        trend_label, trend_icon, trend_color = "Stable", "➡️", "off"
 
     # --- METRIC CARDS ---
     c1, c2, c3 = st.columns(3)
@@ -82,19 +84,19 @@ if not df.empty:
     # --- DUAL AXIS CHART ---
     fig = go.Figure()
 
-    # Raw Reading (Blue)
+    # Trace 1: Raw Data (Blue)
     fig.add_trace(go.Scatter(
         x=df["timestamp"], y=df["reading_value"],
-        name='Raw Data', line=dict(color='#33C3F0', width=1.5)
+        name='Raw Reading', line=dict(color='#33C3F0', width=1.5)
     ))
 
-    # Rolling Trend (Orange Dotted)
+    # Trace 2: Rolling Trend (Orange Dotted)
     fig.add_trace(go.Scatter(
         x=df["timestamp"], y=df["rolling_avg"],
         name='Trend Line', line=dict(color='#FFA500', width=2.5, dash='dot')
     ))
 
-    # Rate of Change (Purple Dotted - Secondary Y)
+    # Trace 3: Rate of Change (Purple Dash-Dot - Secondary Y)
     fig.add_trace(go.Scatter(
         x=df["timestamp"], y=df["rate_of_change"],
         name='Velocity (Rate)', 
@@ -102,25 +104,41 @@ if not df.empty:
         yaxis="y2"
     ))
 
+    # Layout Configuration (Fixed for Python 3.13 / Plotly strictness)
     fig.update_layout(
         template="plotly_dark",
-        xaxis=dict(title="Time", tickfont=dict(size=20), rangeslider=dict(visible=True)),
-        yaxis=dict(title="Reading Value", titlefont=dict(color="#FFA500")),
+        height=650,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=50, r=50, t=80, b=50),
         yaxis2=dict(
             title="Velocity (Change/Sec)",
             titlefont=dict(color="#BF5AF2"),
             tickfont=dict(color="#BF5AF2"),
-            anchor="x", overlaying="y", side="right"
-        ),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        height=600
+            anchor="x",
+            overlaying="y",
+            side="right"
+        )
+    )
+
+    fig.update_xaxes(
+        title_text="Time",
+        tickfont=dict(size=20),
+        rangeslider=dict(visible=True),
+        autorange=True
+    )
+
+    fig.update_yaxes(
+        title_text="Sensor Value",
+        title_font=dict(color="#FFA500"),
+        tickfont=dict(color="#FFA500")
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("Searching for data...")
+    st.info("No data found. Check your Pico 2 W connection.")
 
-# 6. Heartbeat
+# 6. Heartbeat Refresh
 time.sleep(refresh_rate)
 st.rerun()
