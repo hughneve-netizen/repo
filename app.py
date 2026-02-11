@@ -18,7 +18,7 @@ if st.sidebar.button("Clear Cache"):
     st.cache_data.clear()
     st.rerun()
 
-st.title("📡 Live Sensor Data Feed")
+st.title("📡 Live Sensor Data Feed: Depth of Nant Cledlyn, Drefach, Ceredigion")
 
 # 3. Connection
 conn = st.connection("supabase", type=SupabaseConnection)
