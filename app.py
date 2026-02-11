@@ -1,82 +1,114 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.figure_factory as ff # For the distribution plot
+import plotly.graph_objects as go
 from st_supabase_connection import SupabaseConnection
 import time
 
-st.set_page_config(page_title="Sensor Monitor", layout="wide")
+# 1. Page Configuration
+st.set_page_config(page_title="Sensor Monitor Pro", layout="wide")
 
-# 1. Sidebar Controls
-st.sidebar.header("Settings")
+# 2. Sidebar Controls
+st.sidebar.header("🎛️ Controls")
+window_size = st.sidebar.slider("Rolling Average Window", 1, 100, 20)
 view_all = st.sidebar.checkbox("View All Data", value=False)
-refresh_rate = st.sidebar.slider("Refresh Rate (seconds)", 5, 60, 10)
+refresh_rate = st.sidebar.slider("Refresh Rate (sec)", 5, 60, 10)
 
-st.title("📡 Nant Cledlyn Depth, Drefach: Data & Statistical Analysis")
+if st.sidebar.button("Clear Cache"):
+    st.cache_data.clear()
+    st.rerun()
 
+st.title("📡 Live Sensor Data Feed")
+
+# 3. Connection
 conn = st.connection("supabase", type=SupabaseConnection)
 
+# 4. Data Fetching
 @st.cache_data(ttl=refresh_rate)
 def fetch_data(show_all):
     try:
         query = conn.table("sensor_data").select("*").order("timestamp", desc=True)
         if not show_all:
             query = query.limit(500)
-            
+        
         response = query.execute()
         df = pd.DataFrame(response.data)
         
         if not df.empty:
+            # FORCE DATA TYPES (The "Invisible Line" Fix)
             df["timestamp"] = pd.to_datetime(df["timestamp"])
-            df = df.drop_duplicates(subset=['timestamp']).sort_values(by="timestamp")
+            df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
+            
+            # Clean up: remove any rows where math failed
+            df = df.dropna(subset=['reading_value', 'timestamp'])
+            
+            # Sort for time-series flow
+            df = df.sort_values(by="timestamp")
+            
+            # Rolling Avg Math
+            df["rolling_avg"] = df["reading_value"].rolling(window=window_size, min_periods=1).mean()
             return df
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"DB Error: {e}")
         return pd.DataFrame()
 
+# 5. Build UI
 df = fetch_data(view_all)
 
 if not df.empty:
-    # --- SECTION 1: Time Series Line Chart ---
-    st.subheader("Time Series History")
-    fig_line = px.line(df, x="timestamp", y="reading_value", template="plotly_dark")
-    fig_line.update_layout(xaxis=dict(rangeslider=dict(visible=True)))
-    st.plotly_chart(fig_line, use_container_width=True)
+    # Diagnostic Banner (Keep this until you see lines!)
+    st.caption(f"Status: Plotting {len(df)} points. Latest value: {df['reading_value'].iloc[-1]}")
 
-    # --- SECTION 2: Statistical Distribution ---
-    st.divider()
-    col1, col2 = st.columns([2, 1])
+    # Build Chart
+    fig = go.Figure()
 
-    with col1:
-        st.subheader("Normalised Distribution (KDE)")
-        
-        # Prepare data for Distplot (must be a list of lists)
-        hist_data = [df['reading_value'].dropna().tolist()]
-        group_labels = ['Sensor Readings'] 
+    # Add Raw Data Line (Blue)
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], 
+        y=df["reading_value"],
+        mode='lines+markers', # Markers ensure you see data points even if lines break
+        name='Raw Reading',
+        line=dict(color='#33C3F0', width=2),
+        marker=dict(size=4)
+    ))
 
-        # Create distplot with curve
-        fig_dist = ff.create_distplot(
-            hist_data, 
-            group_labels, 
-            bin_size=.5, # Adjust this based on your data precision
-            curve_type='kde', # 'kde' or 'normal'
-            colors=['#33C3F0']
-        )
-        fig_dist.update_layout(template="plotly_dark", showlegend=False)
-        st.plotly_chart(fig_dist, use_container_width=True)
+    # Add Rolling Average (Orange Dotted)
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], 
+        y=df["rolling_avg"],
+        mode='lines',
+        name='Trend Line',
+        line=dict(color='#FFA500', width=2, dash='dot')
+    ))
 
-    with col2:
-        st.subheader("Quick Stats")
-        # Display key metrics for the distribution
-        st.metric("Mean (Average)", f"{df['reading_value'].mean():.2f}")
-        st.metric("Std Deviation", f"{df['reading_value'].std():.2f}")
-        st.metric("Max Reading", f"{df['reading_value'].max():.2f}")
-        st.metric("Min Reading", f"{df['reading_value'].min():.2f}")
+    # Force Layout and Scale
+    fig.update_layout(
+        template="plotly_dark",
+        xaxis=dict(
+            title="Time",
+            tickfont=dict(size=20), # Large font as requested
+            rangeslider=dict(visible=True),
+            autorange=True 
+        ),
+        yaxis=dict(
+            title="Sensor Value",
+            autorange=True 
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=600
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Metrics
+    c1, c2 = st.columns(2)
+    c1.metric("Live Reading", f"{df['reading_value'].iloc[-1]:.2f}")
+    c2.metric("Trend (Avg)", f"{df['rolling_avg'].iloc[-1]:.2f}")
 
 else:
-    st.warning("No data found.")
+    st.warning("No data found in Supabase. Check your Pico 2 W connection.")
 
-# Auto-Refresh
+# 6. Heartbeat
 time.sleep(refresh_rate)
 st.rerun()
