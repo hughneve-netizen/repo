@@ -21,7 +21,7 @@ if st.sidebar.button("🗑️ Clear Cache"):
     st.cache_data.clear()
     st.rerun()
 
-st.title("📡 Live Sensor Analytics")
+st.title("📡 Live Sensor Analytics: Deopth of Nant Cledlyn, Drefach, Ceredigion")
 
 # 3. Database Connection
 conn = st.connection("supabase", type=SupabaseConnection)
@@ -131,7 +131,7 @@ if not df.empty:
 
     # Configure Primary Y-Axis (Left)
     fig.update_yaxes(
-        title=dict(text="Sensor Value", font=dict(color="#FFA500")),
+        title=dict(text="Depth (cm)", font=dict(color="#FFA500")),
         tickfont=dict(color="#FFA500")
     )
 
