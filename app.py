@@ -33,16 +33,19 @@ conn = st.connection("supabase", type=SupabaseConnection)
 @st.cache_data(ttl=refresh_rate)
 def fetch_data(show_all):
     try:
-        # Build query
         query = conn.table("sensor_data").select("*").order("timestamp", desc=True)
-        
         if not show_all:
             query = query.limit(500)
-            
         response = query.execute()
         df = pd.DataFrame(response.data)
         
         if not df.empty:
-            # CLEANING DATA
-            # Convert timestamp and handle timezones
             df["timestamp"] = pd.to_datetime(df["timestamp"])
+            df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
+            df = df.drop_duplicates(subset=['timestamp']).sort_values(by="timestamp")
+            df["rolling_avg"] = df["reading_value"].rolling(window=window_size, min_periods=1).mean()
+            return df
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Database Error: {e}")
+        return pd.DataFrame()
