@@ -66,7 +66,12 @@ def fetch_data(dates):
             
             # SHIFT: Move the trend line left by the window size
             # This aligns the average with the center/start of the data window
-            df["rolling_avg"] = rolling.shift(-window_size)
+            df["rolling_avg"] = df["reading_value"].rolling(
+                window=window_size, 
+                win_type='gaussian', 
+                center=True, 
+                min_periods=1
+            ).mean(std=window_size/4) # std controls the 'tightness' of the curve
             
             return df
         return pd.DataFrame()
