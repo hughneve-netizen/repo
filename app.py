@@ -15,17 +15,24 @@ st.set_page_config(
 # 2. Sidebar Controls
 st.sidebar.header("🎛️ Dashboard Controls")
 
-# Date Filter Logic
+# --- DATE FILTER LOGIC ---
+# Fixed earliest date
+MIN_DATE = datetime(2026, 4, 11).date()
 today = datetime.now().date()
 yesterday = today - timedelta(days=1)
+
+# Ensure the default selection doesn't start before the minimum allowed date
+default_start = max(yesterday, MIN_DATE)
+
 date_range = st.sidebar.date_input(
     "Select Date Range",
-    value=(yesterday, today),
+    value=(default_start, today),
+    min_value=MIN_DATE,
     max_value=today
 )
 
 window_size = st.sidebar.slider("Trend Smoothing (Window)", 1, 100, 20, 
-                                 help="The trend line will be shifted left by this many samples.")
+                                help="The trend line will be shifted left by this many samples.")
 refresh_rate = st.sidebar.slider("Auto-Refresh (seconds)", 5, 60, 10)
 
 if st.sidebar.button("🗑️ Clear Cache"):
@@ -33,6 +40,7 @@ if st.sidebar.button("🗑️ Clear Cache"):
     st.rerun()
 
 st.title("🌊 Nant Cledlyn Water Level Analysis")
+st.subheader("by Hugh Neve")
 
 # 3. Database Connection
 conn = st.connection("supabase", type=SupabaseConnection)
@@ -41,7 +49,8 @@ conn = st.connection("supabase", type=SupabaseConnection)
 @st.cache_data(ttl=refresh_rate)
 def fetch_data(dates):
     try:
-        if len(dates) != 2:
+        # Check if user has selected both a start and end date
+        if not isinstance(dates, (list, tuple)) or len(dates) != 2:
             return pd.DataFrame()
         
         start_date = datetime.combine(dates[0], datetime.min.time()).isoformat()
@@ -61,17 +70,14 @@ def fetch_data(dates):
             df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
             df = df.dropna(subset=['reading_value']).sort_values(by="timestamp")
             
-            # MATH: Rolling Average
-            rolling = df["reading_value"].rolling(window=window_size, min_periods=1).mean()
-            
             # SHIFT: Move the trend line left by the window size
-            # This aligns the average with the center/start of the data window
+            # Center=True aligns the average with the middle of the window
             df["rolling_avg"] = df["reading_value"].rolling(
                 window=window_size, 
                 win_type='gaussian', 
                 center=True, 
                 min_periods=1
-            ).mean(std=window_size/4) # std controls the 'tightness' of the curve
+            ).mean(std=window_size/4)
             
             return df
         return pd.DataFrame()
@@ -93,7 +99,7 @@ if not df.empty:
     # --- CHART BUILDING ---
     fig = go.Figure()
 
-    # Trace 1: Raw Data (Blue)
+    # Trace 1: Raw Data
     fig.add_trace(go.Scatter(
         x=df["timestamp"], 
         y=df["reading_value"], 
@@ -101,7 +107,7 @@ if not df.empty:
         line=dict(color='#33C3F0', width=1.5)
     ))
 
-    # Trace 2: Rolling Trend (Orange Dotted - Shifted Left)
+    # Trace 2: Rolling Trend
     fig.add_trace(go.Scatter(
         x=df["timestamp"], 
         y=df["rolling_avg"], 
@@ -125,7 +131,7 @@ if not df.empty:
     # Configure X-Axis
     fig.update_xaxes(
         title=dict(text="Time", font=dict(size=18)),
-        tickfont=dict(size=20),
+        tickfont=dict(size=14),
         rangeslider=dict(visible=True),
         autorange=True
     )
@@ -149,7 +155,7 @@ if not df.empty:
         mime="text/csv"
     )
 else:
-    st.info("No data found for the selected date range.")
+    st.info("Select a start and end date to display data (Earliest available: 11 April 2026).")
 
 # 6. Heartbeat Refresh
 time.sleep(refresh_rate)
