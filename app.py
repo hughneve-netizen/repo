@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from st_supabase_connection import SupabaseConnection
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # 1. Page Configuration
 st.set_page_config(
@@ -15,21 +15,12 @@ st.set_page_config(
 # 2. Sidebar Controls
 st.sidebar.header("🎛️ Dashboard Controls")
 
-# --- DATE FILTER LOGIC ---
-# Fixed earliest date
-MIN_DATE = datetime(2026, 4, 11).date()
-today = datetime.now().date()
-yesterday = today - timedelta(days=1)
+# FIXED RANGE LOGIC
+# The start date is hardcoded; the end date is always "now"
+START_DATE_FIXED = datetime(2026, 4, 11, 0, 0, 0)
+end_date_now = datetime.now()
 
-# Ensure the default selection doesn't start before the minimum allowed date
-default_start = max(yesterday, MIN_DATE)
-
-date_range = st.sidebar.date_input(
-    "Select Date Range",
-    value=(default_start, today),
-    min_value=MIN_DATE,
-    max_value=today
-)
+st.sidebar.info(f"📅 **Fixed Range:** \n{START_DATE_FIXED.strftime('%d %b %Y')} to Present")
 
 window_size = st.sidebar.slider("Trend Smoothing (Window)", 1, 100, 20, 
                                 help="The trend line will be shifted left by this many samples.")
@@ -47,19 +38,16 @@ conn = st.connection("supabase", type=SupabaseConnection)
 
 # 4. Data Fetching Logic
 @st.cache_data(ttl=refresh_rate)
-def fetch_data(dates):
+def fetch_data(start_dt, end_dt):
     try:
-        # Check if user has selected both a start and end date
-        if not isinstance(dates, (list, tuple)) or len(dates) != 2:
-            return pd.DataFrame()
-        
-        start_date = datetime.combine(dates[0], datetime.min.time()).isoformat()
-        end_date = datetime.combine(dates[1], datetime.max.time()).isoformat()
+        # Convert datetime objects to ISO format strings for Supabase
+        start_str = start_dt.isoformat()
+        end_str = end_dt.isoformat()
 
-        # Query Supabase with date filters
+        # Query Supabase using the fixed start and dynamic end
         query = conn.table("sensor_data").select("*")\
-            .gte("timestamp", start_date)\
-            .lte("timestamp", end_date)\
+            .gte("timestamp", start_str)\
+            .lte("timestamp", end_str)\
             .order("timestamp", desc=True)
             
         response = query.execute()
@@ -70,8 +58,7 @@ def fetch_data(dates):
             df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
             df = df.dropna(subset=['reading_value']).sort_values(by="timestamp")
             
-            # SHIFT: Move the trend line left by the window size
-            # Center=True aligns the average with the middle of the window
+            # Gaussian Rolling Average for smoothing
             df["rolling_avg"] = df["reading_value"].rolling(
                 window=window_size, 
                 win_type='gaussian', 
@@ -85,8 +72,8 @@ def fetch_data(dates):
         st.error(f"Database Error: {e}")
         return pd.DataFrame()
 
-# 5. Execute Fetch
-df = fetch_data(date_range)
+# 5. Execute Fetch (Using the fixed start and current end)
+df = fetch_data(START_DATE_FIXED, end_date_now)
 
 if not df.empty:
     # --- METRICS ---
@@ -94,7 +81,7 @@ if not df.empty:
     
     c1, c2 = st.columns(2)
     c1.metric("Latest Depth", f"{latest_val:.1f} cm")
-    c2.metric("Records in Range", len(df))
+    c2.metric("Total Records since April 11", len(df))
 
     # --- CHART BUILDING ---
     fig = go.Figure()
@@ -149,13 +136,13 @@ if not df.empty:
     st.markdown("---")
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
-        label="📥 Download This Data Range (CSV)",
+        label="📥 Download Full Dataset (CSV)",
         data=csv,
-        file_name=f"nant_cledlyn_depth_{date_range[0]}_to_{date_range[1]}.csv",
+        file_name=f"nant_cledlyn_full_data_{end_date_now.strftime('%Y%m%d')}.csv",
         mime="text/csv"
     )
 else:
-    st.info("Select a start and end date to display data (Earliest available: 11 April 2026).")
+    st.info("No data found starting from 11 April 2026.")
 
 # 6. Heartbeat Refresh
 time.sleep(refresh_rate)
