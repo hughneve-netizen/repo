@@ -17,7 +17,7 @@ st.sidebar.header("🎛️ Dashboard Controls")
 
 # FIXED RANGE LOGIC
 # The start date is hardcoded; the end date is always "now"
-START_DATE_FIXED = datetime(2026, 4, 13, 0, 0, 0)
+START_DATE_FIXED = datetime(2026, 4, 11, 0, 0, 0)
 end_date_now = datetime.now()
 
 st.sidebar.info(f"📅 **Fixed Range:** \n{START_DATE_FIXED.strftime('%d %b %Y')} to Present")
