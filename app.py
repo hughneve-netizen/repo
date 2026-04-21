@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from st_supabase_connection import SupabaseConnection
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 1. Page Configuration
 st.set_page_config(
@@ -15,21 +15,22 @@ st.set_page_config(
 # 2. Sidebar Controls
 st.sidebar.header("🎛️ Dashboard Controls")
 
-MIN_DATE = datetime(2026, 4, 11).date()
+# --- DATE RANGE LOGIC ---
+# Absolute minimum date allowed
+MIN_DATA_DATE = datetime(2026, 4, 11).date()
 today = datetime.now().date()
-yesterday = today - timedelta(days=1)
 
-# Ensure the default selection doesn't start before the minimum allowed date
-default_start = max(yesterday, MIN_DATE)
+# Default start is 3 days ago, but never earlier than April 11, 2026
+three_days_ago = today - timedelta(days=3)
+default_start = max(three_days_ago, MIN_DATA_DATE)
 
 date_range = st.sidebar.date_input(
     "Select Date Range",
     value=(default_start, today),
-    min_value=MIN_DATE,
-    max_value=today
+    min_value=MIN_DATA_DATE,
+    max_value=today,
+    help="Data collection began on 11 April 2026."
 )
-
-st.sidebar.info(f"📅 **Fixed Range:** \n{START_DATE_FIXED.strftime('%d %b %Y')} to Present")
 
 window_size = st.sidebar.slider("Trend Smoothing (Window)", 1, 100, 20, 
                                 help="The trend line will be shifted left by this many samples.")
@@ -47,16 +48,20 @@ conn = st.connection("supabase", type=SupabaseConnection)
 
 # 4. Data Fetching Logic
 @st.cache_data(ttl=refresh_rate)
-def fetch_data(start_dt, end_dt):
+def fetch_data(dates):
     try:
-        # Convert datetime objects to ISO format strings for Supabase
-        start_str = start_dt.isoformat()
-        end_str = end_dt.isoformat()
+        # Streamlit date_input returns a tuple. 
+        # We need both start and end to perform the query.
+        if not isinstance(dates, (list, tuple)) or len(dates) != 2:
+            return pd.DataFrame()
+        
+        start_date = datetime.combine(dates[0], datetime.min.time()).isoformat()
+        end_date = datetime.combine(dates[1], datetime.max.time()).isoformat()
 
-        # Query Supabase using the fixed start and dynamic end
+        # Query Supabase with date filters
         query = conn.table("sensor_data").select("*")\
-            .gte("timestamp", start_str)\
-            .lte("timestamp", end_str)\
+            .gte("timestamp", start_date)\
+            .lte("timestamp", end_date)\
             .order("timestamp", desc=True)
             
         response = query.execute()
@@ -67,7 +72,7 @@ def fetch_data(start_dt, end_dt):
             df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
             df = df.dropna(subset=['reading_value']).sort_values(by="timestamp")
             
-            # Gaussian Rolling Average for smoothing
+            # Gaussian Rolling Average
             df["rolling_avg"] = df["reading_value"].rolling(
                 window=window_size, 
                 win_type='gaussian', 
@@ -81,8 +86,8 @@ def fetch_data(start_dt, end_dt):
         st.error(f"Database Error: {e}")
         return pd.DataFrame()
 
-# 5. Execute Fetch (Using the fixed start and current end)
-df = fetch_data(START_DATE_FIXED, end_date_now)
+# 5. Execute Fetch
+df = fetch_data(date_range)
 
 if not df.empty:
     # --- METRICS ---
@@ -90,7 +95,7 @@ if not df.empty:
     
     c1, c2 = st.columns(2)
     c1.metric("Latest Depth", f"{latest_val:.1f} cm")
-    c2.metric("Total Records since April 11", len(df))
+    c2.metric("Records in Range", len(df))
 
     # --- CHART BUILDING ---
     fig = go.Figure()
@@ -107,7 +112,7 @@ if not df.empty:
     fig.add_trace(go.Scatter(
         x=df["timestamp"], 
         y=df["rolling_avg"], 
-        name=f'Trend ({window_size} Sample Window)', 
+        name=f'Trend ({window_size} Sample)', 
         line=dict(color='#FFA500', width=2.5, dash='dot')
     ))
 
@@ -145,13 +150,17 @@ if not df.empty:
     st.markdown("---")
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
-        label="📥 Download Full Dataset (CSV)",
+        label="📥 Download Selected Range (CSV)",
         data=csv,
-        file_name=f"nant_cledlyn_full_data_{end_date_now.strftime('%Y%m%d')}.csv",
+        file_name=f"nant_cledlyn_{date_range[0]}_to_{date_range[1]}.csv",
         mime="text/csv"
     )
 else:
-    st.info("No data found starting from 11 April 2026.")
+    # If the user is in the middle of selecting a range, dates[1] might not exist yet
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 1:
+        st.info("Please select the end date on the calendar.")
+    else:
+        st.info(f"No data found for the selected range. Earliest data available is {MIN_DATA_DATE.strftime('%d %B %Y')}.")
 
 # 6. Heartbeat Refresh
 time.sleep(refresh_rate)
