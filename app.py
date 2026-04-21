@@ -12,11 +12,13 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. Sidebar Controls
+# 2. Database Connection
+conn = st.connection("supabase", type=SupabaseConnection)
+
+# 3. Sidebar Controls
 st.sidebar.header("🎛️ Dashboard Controls")
 
 # --- DATE RANGE LOGIC ---
-# Absolute minimum date allowed
 MIN_DATA_DATE = datetime(2026, 4, 11).date()
 today = datetime.now().date()
 
@@ -25,7 +27,7 @@ three_days_ago = today - timedelta(days=3)
 default_start = max(three_days_ago, MIN_DATA_DATE)
 
 date_range = st.sidebar.date_input(
-    "Select Date Range",
+    "Select Date Range for Chart",
     value=(default_start, today),
     min_value=MIN_DATA_DATE,
     max_value=today,
@@ -40,25 +42,48 @@ if st.sidebar.button("🗑️ Clear Cache"):
     st.cache_data.clear()
     st.rerun()
 
+# --- GLOBAL DOWNLOAD FUNCTION ---
+@st.cache_data(ttl=3600) # Cache full download for 1 hour to save database bandwidth
+def fetch_all_data():
+    try:
+        # Pull everything from the fixed start date onwards
+        start_str = datetime(2026, 4, 11).isoformat()
+        query = conn.table("sensor_data").select("*")\
+            .gte("timestamp", start_str)\
+            .order("timestamp", desc=True)
+        response = query.execute()
+        return pd.DataFrame(response.data)
+    except Exception as e:
+        return None
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📥 Export Data")
+all_df = fetch_all_data()
+
+if all_df is not None and not all_df.empty:
+    csv_all = all_df.to_csv(index=False).encode('utf-8')
+    st.sidebar.download_button(
+        label="Download ENTIRE Database (CSV)",
+        data=csv_all,
+        file_name="nant_cledlyn_full_historical_data.csv",
+        mime="text/csv",
+        help="Download every record since 11 April 2026"
+    )
+
+# --- MAIN PAGE CONTENT ---
 st.title("🌊 Nant Cledlyn Water Level Analysis")
 st.subheader("by Hugh Neve")
 
-# 3. Database Connection
-conn = st.connection("supabase", type=SupabaseConnection)
-
-# 4. Data Fetching Logic
+# 4. Data Fetching Logic (Filtered)
 @st.cache_data(ttl=refresh_rate)
-def fetch_data(dates):
+def fetch_filtered_data(dates):
     try:
-        # Streamlit date_input returns a tuple. 
-        # We need both start and end to perform the query.
         if not isinstance(dates, (list, tuple)) or len(dates) != 2:
             return pd.DataFrame()
         
         start_date = datetime.combine(dates[0], datetime.min.time()).isoformat()
         end_date = datetime.combine(dates[1], datetime.max.time()).isoformat()
 
-        # Query Supabase with date filters
         query = conn.table("sensor_data").select("*")\
             .gte("timestamp", start_date)\
             .lte("timestamp", end_date)\
@@ -87,76 +112,49 @@ def fetch_data(dates):
         return pd.DataFrame()
 
 # 5. Execute Fetch
-df = fetch_data(date_range)
+df = fetch_filtered_data(date_range)
 
 if not df.empty:
-    # --- METRICS ---
     latest_val = df["reading_value"].iloc[-1]
     
     c1, c2 = st.columns(2)
     c1.metric("Latest Depth", f"{latest_val:.1f} cm")
-    c2.metric("Records in Range", len(df))
+    c2.metric("Records in Current View", len(df))
 
     # --- CHART BUILDING ---
     fig = go.Figure()
-
-    # Trace 1: Raw Data
     fig.add_trace(go.Scatter(
-        x=df["timestamp"], 
-        y=df["reading_value"], 
-        name='Raw Depth', 
-        line=dict(color='#33C3F0', width=1.5)
+        x=df["timestamp"], y=df["reading_value"], 
+        name='Raw Depth', line=dict(color='#33C3F0', width=1.5)
     ))
-
-    # Trace 2: Rolling Trend
     fig.add_trace(go.Scatter(
-        x=df["timestamp"], 
-        y=df["rolling_avg"], 
+        x=df["timestamp"], y=df["rolling_avg"], 
         name=f'Trend ({window_size} Sample)', 
         line=dict(color='#FFA500', width=2.5, dash='dot')
     ))
 
-    # Layout Configuration
     fig.update_layout(
-        title=dict(
-            text="Depth of Nant Cledlyn, Drefach, Ceredigion",
-            font=dict(size=24)
-        ),
-        template="plotly_dark",
-        height=600,
-        showlegend=True,
+        title=dict(text="Depth of Nant Cledlyn, Drefach, Ceredigion", font=dict(size=24)),
+        template="plotly_dark", height=600, showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
         margin=dict(l=50, r=50, t=100, b=50)
     )
 
-    # Configure X-Axis
-    fig.update_xaxes(
-        title=dict(text="Time", font=dict(size=18)),
-        tickfont=dict(size=14),
-        rangeslider=dict(visible=True),
-        autorange=True
-    )
-
-    # Configure Y-Axis
-    fig.update_yaxes(
-        title=dict(text="Approx. depth, cm", font=dict(color="#FFA500", size=18)),
-        tickfont=dict(size=16),
-        autorange=True
-    )
+    fig.update_xaxes(title=dict(text="Time", font=dict(size=18)), tickfont=dict(size=14), rangeslider=dict(visible=True))
+    fig.update_yaxes(title=dict(text="Approx. depth, cm", font=dict(color="#FFA500", size=18)), tickfont=dict(size=16))
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- DOWNLOAD SECTION ---
+    # --- LOCAL DOWNLOAD SECTION ---
     st.markdown("---")
-    csv = df.to_csv(index=False).encode('utf-8')
+    csv_filtered = df.to_csv(index=False).encode('utf-8')
     st.download_button(
-        label="📥 Download Selected Range (CSV)",
-        data=csv,
+        label="📥 Download This Filtered Range (CSV)",
+        data=csv_filtered,
         file_name=f"nant_cledlyn_{date_range[0]}_to_{date_range[1]}.csv",
         mime="text/csv"
     )
 else:
-    # If the user is in the middle of selecting a range, dates[1] might not exist yet
     if isinstance(date_range, (list, tuple)) and len(date_range) == 1:
         st.info("Please select the end date on the calendar.")
     else:
