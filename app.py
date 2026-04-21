@@ -15,10 +15,19 @@ st.set_page_config(
 # 2. Sidebar Controls
 st.sidebar.header("🎛️ Dashboard Controls")
 
-# FIXED RANGE LOGIC
-# The start date is hardcoded; the end date is always "now"
-START_DATE_FIXED = datetime(2026, 4, 11, 0, 0, 0)
-end_date_now = datetime.now()
+MIN_DATE = datetime(2026, 4, 11).date()
+today = datetime.now().date()
+yesterday = today - timedelta(days=1)
+
+# Ensure the default selection doesn't start before the minimum allowed date
+default_start = max(yesterday, MIN_DATE)
+
+date_range = st.sidebar.date_input(
+    "Select Date Range",
+    value=(default_start, today),
+    min_value=MIN_DATE,
+    max_value=today
+)
 
 st.sidebar.info(f"📅 **Fixed Range:** \n{START_DATE_FIXED.strftime('%d %b %Y')} to Present")
 
