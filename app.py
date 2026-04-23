@@ -51,6 +51,7 @@ def fetch_all_data():
         query = conn.table("sensor_data").select("*")\
             .gte("timestamp", start_str)\
             .order("timestamp", desc=True)
+            .limit(50000)
         response = query.execute()
         return pd.DataFrame(response.data)
     except Exception as e:
