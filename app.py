@@ -22,7 +22,6 @@ st.sidebar.header("🎛️ Dashboard Controls")
 MIN_DATA_DATE = datetime(2026, 4, 11).date()
 today = datetime.now().date()
 
-# Default start is 3 days ago, but never earlier than April 11, 2026
 three_days_ago = today - timedelta(days=3)
 default_start = max(three_days_ago, MIN_DATA_DATE)
 
@@ -30,28 +29,27 @@ date_range = st.sidebar.date_input(
     "Select Date Range for Chart",
     value=(default_start, today),
     min_value=MIN_DATA_DATE,
-    max_value=today,
-    help="Data collection began on 11 April 2026."
+    max_value=today
 )
 
-window_size = st.sidebar.slider("Trend Smoothing (Window)", 1, 100, 20, 
-                                help="The trend line will be shifted left by this many samples.")
+window_size = st.sidebar.slider("Trend Smoothing (Window)", 1, 100, 20)
 refresh_rate = st.sidebar.slider("Auto-Refresh (seconds)", 5, 60, 10)
 
 if st.sidebar.button("🗑️ Clear Cache"):
     st.cache_data.clear()
     st.rerun()
 
-# --- GLOBAL DOWNLOAD FUNCTION ---
-@st.cache_data(ttl=3600) # Cache full download for 1 hour to save database bandwidth
+# --- GLOBAL DOWNLOAD FUNCTION (Fixing the 1000 record limit) ---
+@st.cache_data(ttl=3600)
 def fetch_all_data():
     try:
-        # Pull everything from the fixed start date onwards
+        # We add .limit(50000) to override the default 1000 limit
         start_str = datetime(2026, 4, 11).isoformat()
         query = conn.table("sensor_data").select("*")\
             .gte("timestamp", start_str)\
-            .order("timestamp", desc=True)
-            .limit(50000)
+            .order("timestamp", desc=True)\
+            .limit(50000) # Increased limit to capture full history
+        
         response = query.execute()
         return pd.DataFrame(response.data)
     except Exception as e:
@@ -64,18 +62,17 @@ all_df = fetch_all_data()
 if all_df is not None and not all_df.empty:
     csv_all = all_df.to_csv(index=False).encode('utf-8')
     st.sidebar.download_button(
-        label="Download ENTIRE Database (CSV)",
+        label=f"Download All Records ({len(all_df)})",
         data=csv_all,
         file_name="nant_cledlyn_full_historical_data.csv",
-        mime="text/csv",
-        help="Download every record since 11 April 2026"
+        mime="text/csv"
     )
 
 # --- MAIN PAGE CONTENT ---
 st.title("🌊 Nant Cledlyn Water Level Analysis")
 st.subheader("by Hugh Neve")
 
-# 4. Data Fetching Logic (Filtered)
+# 4. Data Fetching Logic (Filtered - also fixing the limit)
 @st.cache_data(ttl=refresh_rate)
 def fetch_filtered_data(dates):
     try:
@@ -85,10 +82,12 @@ def fetch_filtered_data(dates):
         start_date = datetime.combine(dates[0], datetime.min.time()).isoformat()
         end_date = datetime.combine(dates[1], datetime.max.time()).isoformat()
 
+        # Increased limit here as well in case a user selects a wide date range
         query = conn.table("sensor_data").select("*")\
             .gte("timestamp", start_date)\
             .lte("timestamp", end_date)\
-            .order("timestamp", desc=True)
+            .order("timestamp", desc=True)\
+            .limit(20000)
             
         response = query.execute()
         df = pd.DataFrame(response.data)
@@ -98,7 +97,6 @@ def fetch_filtered_data(dates):
             df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
             df = df.dropna(subset=['reading_value']).sort_values(by="timestamp")
             
-            # Gaussian Rolling Average
             df["rolling_avg"] = df["reading_value"].rolling(
                 window=window_size, 
                 win_type='gaussian', 
@@ -124,42 +122,27 @@ if not df.empty:
 
     # --- CHART BUILDING ---
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df["timestamp"], y=df["reading_value"], 
-        name='Raw Depth', line=dict(color='#33C3F0', width=1.5)
-    ))
-    fig.add_trace(go.Scatter(
-        x=df["timestamp"], y=df["rolling_avg"], 
-        name=f'Trend ({window_size} Sample)', 
-        line=dict(color='#FFA500', width=2.5, dash='dot')
-    ))
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Raw Depth', line=dict(color='#33C3F0', width=1.5)))
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Trend', line=dict(color='#FFA500', width=2.5, dash='dot')))
 
     fig.update_layout(
-        title=dict(text="Depth of Nant Cledlyn, Drefach, Ceredigion", font=dict(size=24)),
-        template="plotly_dark", height=600, showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
-        margin=dict(l=50, r=50, t=100, b=50)
+        template="plotly_dark", height=600,
+        margin=dict(l=50, r=50, t=50, b=50),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
-
-    fig.update_xaxes(title=dict(text="Time", font=dict(size=18)), tickfont=dict(size=14), rangeslider=dict(visible=True))
-    fig.update_yaxes(title=dict(text="Approx. depth, cm", font=dict(color="#FFA500", size=18)), tickfont=dict(size=16))
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- LOCAL DOWNLOAD SECTION ---
     st.markdown("---")
     csv_filtered = df.to_csv(index=False).encode('utf-8')
     st.download_button(
-        label="📥 Download This Filtered Range (CSV)",
+        label=f"📥 Download Filtered Range ({len(df)} rows)",
         data=csv_filtered,
         file_name=f"nant_cledlyn_{date_range[0]}_to_{date_range[1]}.csv",
         mime="text/csv"
     )
 else:
-    if isinstance(date_range, (list, tuple)) and len(date_range) == 1:
-        st.info("Please select the end date on the calendar.")
-    else:
-        st.info(f"No data found for the selected range. Earliest data available is {MIN_DATA_DATE.strftime('%d %B %Y')}.")
+    st.info("No data found for the selected range.")
 
 # 6. Heartbeat Refresh
 time.sleep(refresh_rate)
