@@ -21,7 +21,6 @@ st.sidebar.header("🎛️ Dashboard Controls")
 # --- DATE RANGE LOGIC ---
 MIN_DATA_DATE = datetime(2026, 4, 11).date()
 today = datetime.now().date()
-
 three_days_ago = today - timedelta(days=3)
 default_start = max(three_days_ago, MIN_DATA_DATE)
 
@@ -39,20 +38,39 @@ if st.sidebar.button("🗑️ Clear Cache"):
     st.cache_data.clear()
     st.rerun()
 
-# --- GLOBAL DOWNLOAD FUNCTION (Fixing the 1000 record limit) ---
+# --- PAGINATED DATA FETCHING (To bypass the 1000 row limit) ---
+def fetch_paginated_data(query_builder):
+    """Helper function to loop through Supabase pages until all data is retrieved."""
+    all_rows = []
+    page_size = 1000  # Standard Supabase page limit
+    offset = 0
+    
+    while True:
+        # Request a specific range of rows
+        response = query_builder.range(offset, offset + page_size - 1).execute()
+        data = response.data
+        all_rows.extend(data)
+        
+        # If we got fewer than 1000 rows, we've reached the end
+        if len(data) < page_size:
+            break
+        
+        offset += page_size
+    
+    return pd.DataFrame(all_rows)
+
 @st.cache_data(ttl=3600)
 def fetch_all_data():
     try:
-        # We add .limit(50000) to override the default 1000 limit
         start_str = datetime(2026, 4, 11).isoformat()
+        # Build query but don't execute yet
         query = conn.table("sensor_data").select("*")\
             .gte("timestamp", start_str)\
-            .order("timestamp", desc=True)\
-            .limit(50000) # Increased limit to capture full history
+            .order("timestamp", desc=True)
         
-        response = query.execute()
-        return pd.DataFrame(response.data)
+        return fetch_paginated_data(query)
     except Exception as e:
+        st.error(f"Error fetching all data: {e}")
         return None
 
 st.sidebar.markdown("---")
@@ -72,7 +90,6 @@ if all_df is not None and not all_df.empty:
 st.title("🌊 Nant Cledlyn Water Level Analysis")
 st.subheader("by Hugh Neve")
 
-# 4. Data Fetching Logic (Filtered - also fixing the limit)
 @st.cache_data(ttl=refresh_rate)
 def fetch_filtered_data(dates):
     try:
@@ -82,15 +99,13 @@ def fetch_filtered_data(dates):
         start_date = datetime.combine(dates[0], datetime.min.time()).isoformat()
         end_date = datetime.combine(dates[1], datetime.max.time()).isoformat()
 
-        # Increased limit here as well in case a user selects a wide date range
+        # Build query for the specific date range
         query = conn.table("sensor_data").select("*")\
             .gte("timestamp", start_date)\
             .lte("timestamp", end_date)\
-            .order("timestamp", desc=True)\
-            .limit(20000)
+            .order("timestamp", desc=True)
             
-        response = query.execute()
-        df = pd.DataFrame(response.data)
+        df = fetch_paginated_data(query)
         
         if not df.empty:
             df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -118,7 +133,7 @@ if not df.empty:
     
     c1, c2 = st.columns(2)
     c1.metric("Latest Depth", f"{latest_val:.1f} cm")
-    c2.metric("Records in Current View", len(df))
+    c2.metric("Records in Current View", f"{len(df):,}") # Added comma for readability
 
     # --- CHART BUILDING ---
     fig = go.Figure()
@@ -136,7 +151,7 @@ if not df.empty:
     st.markdown("---")
     csv_filtered = df.to_csv(index=False).encode('utf-8')
     st.download_button(
-        label=f"📥 Download Filtered Range ({len(df)} rows)",
+        label=f"📥 Download Filtered Range ({len(df):,} rows)",
         data=csv_filtered,
         file_name=f"nant_cledlyn_{date_range[0]}_to_{date_range[1]}.csv",
         mime="text/csv"
