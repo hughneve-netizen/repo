@@ -32,7 +32,7 @@ date_range = st.sidebar.date_input(
 )
 
 window_size = st.sidebar.slider("Trend Smoothing (Window)", 1, 100, 20)
-refresh_rate = st.sidebar.slider("Auto-Refresh (seconds)", 5, 60, 10)
+refresh_rate = 600
 
 if st.sidebar.button("🗑️ Clear Cache"):
     st.cache_data.clear()
