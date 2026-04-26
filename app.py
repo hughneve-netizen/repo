@@ -17,20 +17,17 @@ conn = st.connection("supabase", type=SupabaseConnection)
 
 # --- TIDE PREDICTION LOGIC ---
 def get_high_tides(start_date, end_date):
-    """
-    Calculates approximate high tides for Aberystwyth using a 
-    semi-diurnal lunar cycle (12.42 hours).
-    """
     high_tides = []
     # Known High Tide Reference for Aberystwyth: April 26, 2026 @ 04:32
+    # The semi-diurnal cycle is approximately 12.42 hours
     ref_tide = datetime(2026, 4, 26, 4, 32)
     cycle = timedelta(hours=12, minutes=25, seconds=12)
     
-    # Align reference to before the start_date
-    current_tide = ref_tide
     start_dt = datetime.combine(start_date, datetime.min.time())
     end_dt = datetime.combine(end_date, datetime.max.time())
 
+    # Align reference to well before the start_dt to catch all events
+    current_tide = ref_tide
     while current_tide > start_dt:
         current_tide -= cycle
     
@@ -46,8 +43,7 @@ st.sidebar.header("🎛️ Dashboard Controls")
 
 MIN_DATA_DATE = datetime(2026, 4, 11).date()
 today = datetime.now().date()
-three_days_ago = today - timedelta(days=3)
-default_start = max(three_days_ago, MIN_DATA_DATE)
+default_start = max(today - timedelta(days=3), MIN_DATA_DATE)
 
 date_range = st.sidebar.date_input(
     "Select Date Range",
@@ -56,7 +52,7 @@ date_range = st.sidebar.date_input(
     max_value=today
 )
 
-show_tides = st.sidebar.checkbox("Show Aberystwyth High Tide Markers", value=True)
+show_tides = st.sidebar.checkbox("Show Aberystwyth High Tides", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
 refresh_rate = st.sidebar.slider("Auto-Refresh (seconds)", 5, 60, 10)
 
@@ -108,7 +104,6 @@ if not df.empty:
     c1.metric("Latest Depth", f"{latest_val:.1f} cm")
     c2.metric("Total Records", f"{len(df):,}")
 
-    # --- CHART ---
     fig = go.Figure()
 
     # River Data
@@ -123,23 +118,22 @@ if not df.empty:
         name='Trend', line=dict(color='#FFA500', width=2, dash='dot')
     ))
 
-    # High Tide Markers
+    # High Tide Markers (Magenta)
     if show_tides:
         tide_times = get_high_tides(date_range[0], date_range[1])
-        # Find the top of the chart for marker placement
-        y_max = df["reading_value"].max()
+        y_max = df["reading_value"].max() * 1.02  # Place slightly above data
         
-        # Add vertical lines
+        # Add vertical dashed lines
         for t in tide_times:
-            fig.add_vline(x=t, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.2)")
+            fig.add_vline(x=t, line_width=1.5, line_dash="dash", line_color="#FF00FF", opacity=0.4)
         
-        # Add a single trace for all high tide markers
+        # Add the markers
         fig.add_trace(go.Scatter(
             x=tide_times,
             y=[y_max] * len(tide_times),
             mode='markers',
             name='High Tide (Aberystwyth)',
-            marker=dict(symbol='triangle-down', size=12, color='#FFFFFF'),
+            marker=dict(symbol='triangle-down', size=14, color='#FF00FF'),
             text=[f"High Tide @ {t.strftime('%H:%M')}" for t in tide_times],
             hoverinfo='text'
         ))
@@ -150,7 +144,7 @@ if not df.empty:
         margin=dict(l=50, r=50, t=50, b=50),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         xaxis=dict(title="Time", rangeslider=dict(visible=True)),
-        yaxis=dict(title="Approx. Depth (cm)")
+        yaxis=dict(title="Approx. Depth (cm)", autorange=True)
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -167,7 +161,6 @@ if not df.empty:
 else:
     st.info("No data found for the selected range.")
 
-# 5. Refresh Logic
-# Only call sleep and rerun at the very end to avoid double-processing
+# 5. Refresh Logic (One call at the end)
 time.sleep(refresh_rate)
 st.rerun()
