@@ -77,11 +77,9 @@ def fetch_filtered_data(dates):
         df = df.dropna(subset=['reading_value']).sort_values(by="timestamp")
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
         
-        # Prepare data for diurnal plot
         df["date_label"] = df["timestamp"].dt.date.astype(str)
-        # Round time to nearest 5 minutes for smoother aggregate trendline
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60 + df["timestamp"].dt.second/3600
-        df["time_bin"] = (df["time_of_day"] * 12).round() / 12  # 5-minute bins
+        df["time_bin"] = (df["time_of_day"] * 12).round() / 12 
         
         daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
         df = df.merge(daily_stats, on="date_label")
@@ -97,6 +95,19 @@ st.subheader("by Hugh Neve")
 df = fetch_filtered_data(date_range)
 
 if not df.empty:
+    # --- METRICS & TIMESTAMP ---
+    latest_row = df.iloc[-1]
+    latest_time = latest_row["timestamp"].strftime("%d %b %Y, %H:%M")
+    latest_val = latest_row["reading_value"]
+    
+    # Highlight the last update time
+    st.info(f"🕒 **Last Data Update:** {latest_time}")
+    
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Latest Depth", f"{latest_val:.1f} cm")
+    m2.metric("Total Records in View", f"{len(df):,}")
+    m3.metric("Trend Window", f"{window_size} samples")
+
     # --- CHART 1: TIMELINE ---
     st.markdown("### 📈 Chronological Timeline")
     fig1 = go.Figure()
@@ -112,48 +123,20 @@ if not df.empty:
     fig1.update_layout(template="plotly_dark", height=400, margin=dict(t=30), xaxis=dict(rangeslider=dict(visible=True)), yaxis=dict(title="Depth (cm)"))
     st.plotly_chart(fig1, use_container_width=True)
 
-    # --- CHART 2: DIURNAL OVERLAY (NORMALIZED PERCENTAGE) ---
+    # --- CHART 2: DIURNAL OVERLAY ---
     st.markdown("### 🕒 Diurnal Overlay with Aggregate Trend")
-    
     fig2 = go.Figure()
     unique_days = sorted(df["date_label"].unique())
-    # Faded colors for individual days to let the trendline pop
     colors = px.colors.sample_colorscale("Viridis", [i/(len(unique_days) or 1) for i in range(len(unique_days))])
 
     for i, day in enumerate(unique_days):
         day_df = df[df["date_label"] == day]
-        fig2.add_trace(go.Scatter(
-            x=day_df["time_of_day"], y=day_df["daily_pct"],
-            mode='lines', name=day,
-            line=dict(width=1, color=colors[i]),
-            opacity=0.4, # Make individual days slightly transparent
-            hoverinfo='skip'
-        ))
+        fig2.add_trace(go.Scatter(x=day_df["time_of_day"], y=day_df["daily_pct"], mode='lines', name=day, line=dict(width=1, color=colors[i]), opacity=0.3, hoverinfo='skip'))
 
-    # --- ADD THICK RED TRENDLINE ---
-    # Aggregate all days by the time bins
     agg_trend = df.groupby("time_bin")["daily_pct"].mean().reset_index().sort_values("time_bin")
-    
-    fig2.add_trace(go.Scatter(
-        x=agg_trend["time_bin"], 
-        y=agg_trend["daily_pct"],
-        mode='lines',
-        name='Overall Average Trend',
-        line=dict(color='red', width=4), # Thicker and Red
-        hovertemplate="<b>Avg Trend</b><br>Time: %{x:.2f}h<br>Avg Relative: %{y:.1f}%<extra></extra>"
-    ))
+    fig2.add_trace(go.Scatter(x=agg_trend["time_bin"], y=agg_trend["daily_pct"], mode='lines', name='Overall Average Trend', line=dict(color='red', width=4), hovertemplate="<b>Avg Trend</b><br>Time: %{x:.2f}h<br>Avg Relative: %{y:.1f}%<extra></extra>"))
 
-    fig2.update_layout(
-        template="plotly_dark", height=500, margin=dict(t=30),
-        xaxis=dict(
-            title="Hour of Day",
-            tickvals=[0, 3, 6, 9, 12, 15, 18, 21, 24],
-            ticktext=['00:00', '03:00', '06:00', '09:00', '12:00', '15:00', '18:00', '21:00', '24:00'],
-            range=[0, 24]
-        ),
-        yaxis=dict(title="Daily Range (%)", range=[-5, 105]),
-        legend=dict(title="Legend", orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
+    fig2.update_layout(template="plotly_dark", height=500, margin=dict(t=30), xaxis=dict(title="Hour of Day", tickvals=[0, 3, 6, 9, 12, 15, 18, 21, 24], ticktext=['00:00', '03:00', '06:00', '09:00', '12:00', '15:00', '18:00', '21:00', '24:00'], range=[0, 24]), yaxis=dict(title="Daily Range (%)", range=[-5, 105]), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig2, use_container_width=True)
 
     # Download Button
