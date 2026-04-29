@@ -79,15 +79,12 @@ def fetch_filtered_data(dates):
         
         # Prepare data for diurnal plot
         df["date_label"] = df["timestamp"].dt.date.astype(str)
+        # Round time to nearest 5 minutes for smoother aggregate trendline
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60 + df["timestamp"].dt.second/3600
+        df["time_bin"] = (df["time_of_day"] * 12).round() / 12  # 5-minute bins
         
-        # --- NORMALIZATION LOGIC ---
-        # Group by date and calculate min/max for that day
         daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
         df = df.merge(daily_stats, on="date_label")
-        
-        # Calculate percentage: (val - min) / (max - min) * 100
-        # Avoid division by zero if min == max
         df["daily_pct"] = (df["reading_value"] - df["min"]) / (df["max"] - df["min"]) * 100
         df.loc[df["max"] == df["min"], "daily_pct"] = 0 
         
@@ -112,41 +109,50 @@ if not df.empty:
         fig1.add_trace(go.Scatter(x=sunrises, y=[y_max]*len(sunrises), mode='markers', name='Sunrise', marker=dict(symbol='triangle-up', size=10, color='#FFD700'), hoverinfo='text', text=[f"Sunrise: {s.strftime('%H:%M')}" for s in sunrises]))
         fig1.add_trace(go.Scatter(x=sunsets, y=[y_max]*len(sunsets), mode='markers', name='Sunset', marker=dict(symbol='triangle-down', size=10, color='#FF4500'), hoverinfo='text', text=[f"Sunset: {s.strftime('%H:%M')}" for s in sunsets]))
 
-    fig1.update_layout(template="plotly_dark", height=450, margin=dict(t=30), xaxis=dict(rangeslider=dict(visible=True)), yaxis=dict(title="Depth (cm)"))
+    fig1.update_layout(template="plotly_dark", height=400, margin=dict(t=30), xaxis=dict(rangeslider=dict(visible=True)), yaxis=dict(title="Depth (cm)"))
     st.plotly_chart(fig1, use_container_width=True)
 
     # --- CHART 2: DIURNAL OVERLAY (NORMALIZED PERCENTAGE) ---
-    st.markdown("### 🕒 Diurnal Overlay (Percentage of Daily Min/Max)")
-    st.caption("Each day's line is scaled from 0% (daily minimum) to 100% (daily maximum).")
+    st.markdown("### 🕒 Diurnal Overlay with Aggregate Trend")
     
     fig2 = go.Figure()
     unique_days = sorted(df["date_label"].unique())
+    # Faded colors for individual days to let the trendline pop
     colors = px.colors.sample_colorscale("Viridis", [i/(len(unique_days) or 1) for i in range(len(unique_days))])
 
     for i, day in enumerate(unique_days):
         day_df = df[df["date_label"] == day]
         fig2.add_trace(go.Scatter(
-            x=day_df["time_of_day"], 
-            y=day_df["daily_pct"],
-            mode='lines',
-            name=day,
-            line=dict(width=1.5, color=colors[i]),
-            hovertemplate=f"<b>Date: {day}</b><br>Time: %{{x:.2f}}h<br>Relative: %{{y:.1f}}%<extra></extra>"
+            x=day_df["time_of_day"], y=day_df["daily_pct"],
+            mode='lines', name=day,
+            line=dict(width=1, color=colors[i]),
+            opacity=0.4, # Make individual days slightly transparent
+            hoverinfo='skip'
         ))
 
+    # --- ADD THICK RED TRENDLINE ---
+    # Aggregate all days by the time bins
+    agg_trend = df.groupby("time_bin")["daily_pct"].mean().reset_index().sort_values("time_bin")
+    
+    fig2.add_trace(go.Scatter(
+        x=agg_trend["time_bin"], 
+        y=agg_trend["daily_pct"],
+        mode='lines',
+        name='Overall Average Trend',
+        line=dict(color='red', width=4), # Thicker and Red
+        hovertemplate="<b>Avg Trend</b><br>Time: %{x:.2f}h<br>Avg Relative: %{y:.1f}%<extra></extra>"
+    ))
+
     fig2.update_layout(
-        template="plotly_dark",
-        height=500,
-        margin=dict(t=30),
+        template="plotly_dark", height=500, margin=dict(t=30),
         xaxis=dict(
             title="Hour of Day",
-            tickmode='array',
             tickvals=[0, 3, 6, 9, 12, 15, 18, 21, 24],
             ticktext=['00:00', '03:00', '06:00', '09:00', '12:00', '15:00', '18:00', '21:00', '24:00'],
             range=[0, 24]
         ),
         yaxis=dict(title="Daily Range (%)", range=[-5, 105]),
-        legend=dict(title="Select Date", orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
+        legend=dict(title="Legend", orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig2, use_container_width=True)
 
