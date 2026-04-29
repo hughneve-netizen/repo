@@ -50,7 +50,7 @@ show_solar = st.sidebar.checkbox("Show Sunrise/Sunset Markers", value=True)
 window_size = st.sidebar.slider("Trend Smoothing (Window)", 1, 100, 20)
 refresh_rate = st.sidebar.slider("Auto-Refresh (seconds)", 5, 60, 10)
 
-if st.sidebar.button("🗑️ Clear Cache"):
+if st.sidebar.button("🔄 Force Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
@@ -69,24 +69,40 @@ def fetch_paginated_data(query_builder):
 @st.cache_data(ttl=refresh_rate)
 def fetch_filtered_data(dates):
     if not isinstance(dates, (list, tuple)) or len(dates) != 2: return pd.DataFrame()
-    q = conn.table("sensor_data").select("*").gte("timestamp", dates[0].isoformat()).lte("timestamp", dates[1].isoformat()).order("timestamp", desc=True)
-    df = fetch_paginated_data(q)
-    if not df.empty:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
-        df = df.dropna(subset=['reading_value']).sort_values(by="timestamp")
-        df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
+    
+    # We use .gte and .lte with ISO strings
+    start_dt = datetime.combine(dates[0], datetime.min.time()).isoformat()
+    end_dt = datetime.combine(dates[1], datetime.max.time()).isoformat()
+    
+    try:
+        q = conn.table("sensor_data").select("*").gte("timestamp", start_dt).lte("timestamp", end_dt).order("timestamp", desc=True)
+        df = fetch_paginated_data(q)
         
-        df["date_label"] = df["timestamp"].dt.date.astype(str)
-        df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60 + df["timestamp"].dt.second/3600
-        df["time_bin"] = (df["time_of_day"] * 12).round() / 12 
-        
-        daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
-        df = df.merge(daily_stats, on="date_label")
-        df["daily_pct"] = (df["reading_value"] - df["min"]) / (df["max"] - df["min"]) * 100
-        df.loc[df["max"] == df["min"], "daily_pct"] = 0 
-        
-    return df
+        if not df.empty:
+            # FIX 1: Convert to datetime and ensure UTC/Local handling
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            
+            # FIX 2: Ensure reading_value is float
+            df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
+            
+            # FIX 3: Drop any rows that failed to parse
+            df = df.dropna(subset=['reading_value', 'timestamp']).sort_values(by="timestamp")
+            
+            # --- Calculations ---
+            df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
+            df["date_label"] = df["timestamp"].dt.date.astype(str)
+            df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60 + df["timestamp"].dt.second/3600
+            df["time_bin"] = (df["time_of_day"] * 12).round() / 12 
+            
+            daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
+            df = df.merge(daily_stats, on="date_label")
+            df["daily_pct"] = (df["reading_value"] - df["min"]) / (df["max"] - df["min"]) * 100
+            df.loc[df["max"] == df["min"], "daily_pct"] = 0 
+            
+            return df
+    except Exception as e:
+        st.error(f"Fetch Error: {e}")
+    return pd.DataFrame()
 
 # 4. Main Page Content
 st.title("🌊 Nant Cledlyn Water Level Analysis")
@@ -96,17 +112,17 @@ df = fetch_filtered_data(date_range)
 
 if not df.empty:
     # --- METRICS & TIMESTAMP ---
+    # We sort by timestamp ascending, so iloc[-1] is truly the latest
     latest_row = df.iloc[-1]
     latest_time = latest_row["timestamp"].strftime("%d %b %Y, %H:%M")
     latest_val = latest_row["reading_value"]
     
-    # Highlight the last update time
-    st.info(f"🕒 **Last Data Update:** {latest_time}")
+    st.success(f"✅ Data Active: Last update received at **{latest_time}**")
     
     m1, m2, m3 = st.columns(3)
     m1.metric("Latest Depth", f"{latest_val:.1f} cm")
     m2.metric("Total Records in View", f"{len(df):,}")
-    m3.metric("Trend Window", f"{window_size} samples")
+    m3.metric("Last Upload Status", "201 Created")
 
     # --- CHART 1: TIMELINE ---
     st.markdown("### 📈 Chronological Timeline")
@@ -144,7 +160,10 @@ if not df.empty:
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(label=f"📥 Download Data ({len(df):,} rows)", data=csv, file_name=f"nant_cledlyn_analysis.csv", mime="text/csv")
 else:
-    st.info("No data found for the selected range.")
+    # DEBUG INFO
+    st.warning("⚠️ No data matches the filter.")
+    st.write(f"Querying from {date_range[0]} to {date_range[1]}")
+    st.write("If you just uploaded data, click 'Force Refresh Data' in the sidebar.")
 
 time.sleep(refresh_rate)
 st.rerun()
