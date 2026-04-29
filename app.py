@@ -31,7 +31,7 @@ def get_solar_events(start_date, end_date):
             h = math.degrees(math.acos(cos_h))
             eot = 9.87 * math.sin(math.radians(2 * (360 / 364 * (n - 81)))) - \
                   7.53 * math.cos(math.radians(360 / 364 * (n - 81))) - 1.5 * math.sin(math.radians(360 / 364 * (n - 81)))
-            tz_offset = 1 # April is BST
+            tz_offset = 1 
             noon = 12 - (lon / 15) - (eot / 60) + tz_offset
             base_dt = datetime.combine(curr_date, datetime.min.time())
             sunrises.append(base_dt + timedelta(hours=noon - (h / 15)))
@@ -76,9 +76,21 @@ def fetch_filtered_data(dates):
         df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
         df = df.dropna(subset=['reading_value']).sort_values(by="timestamp")
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
+        
         # Prepare data for diurnal plot
         df["date_label"] = df["timestamp"].dt.date.astype(str)
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60 + df["timestamp"].dt.second/3600
+        
+        # --- NORMALIZATION LOGIC ---
+        # Group by date and calculate min/max for that day
+        daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
+        df = df.merge(daily_stats, on="date_label")
+        
+        # Calculate percentage: (val - min) / (max - min) * 100
+        # Avoid division by zero if min == max
+        df["daily_pct"] = (df["reading_value"] - df["min"]) / (df["max"] - df["min"]) * 100
+        df.loc[df["max"] == df["min"], "daily_pct"] = 0 
+        
     return df
 
 # 4. Main Page Content
@@ -91,7 +103,7 @@ if not df.empty:
     # --- CHART 1: TIMELINE ---
     st.markdown("### 📈 Chronological Timeline")
     fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Raw Depth', line=dict(color='#33C3F0', width=1.5)))
+    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Raw Depth (cm)', line=dict(color='#33C3F0', width=1.5)))
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Trend', line=dict(color='#FFA500', width=2, dash='dot')))
     
     if show_solar:
@@ -103,24 +115,23 @@ if not df.empty:
     fig1.update_layout(template="plotly_dark", height=450, margin=dict(t=30), xaxis=dict(rangeslider=dict(visible=True)), yaxis=dict(title="Depth (cm)"))
     st.plotly_chart(fig1, use_container_width=True)
 
-    # --- CHART 2: DIURNAL OVERLAY (Time of Day irrespective of date) ---
-    st.markdown("### 🕒 Diurnal Overlay (Comparing Days by Time of Day)")
+    # --- CHART 2: DIURNAL OVERLAY (NORMALIZED PERCENTAGE) ---
+    st.markdown("### 🕒 Diurnal Overlay (Percentage of Daily Min/Max)")
+    st.caption("Each day's line is scaled from 0% (daily minimum) to 100% (daily maximum).")
+    
     fig2 = go.Figure()
-
-    # Create a line for each day
     unique_days = sorted(df["date_label"].unique())
-    # Generate a color palette for the days
     colors = px.colors.sample_colorscale("Viridis", [i/(len(unique_days) or 1) for i in range(len(unique_days))])
 
     for i, day in enumerate(unique_days):
         day_df = df[df["date_label"] == day]
         fig2.add_trace(go.Scatter(
             x=day_df["time_of_day"], 
-            y=day_df["reading_value"],
+            y=day_df["daily_pct"],
             mode='lines',
             name=day,
             line=dict(width=1.5, color=colors[i]),
-            hovertemplate=f"<b>Date: {day}</b><br>Time: %{{x:.2f}}h<br>Depth: %{{y}} cm<extra></extra>"
+            hovertemplate=f"<b>Date: {day}</b><br>Time: %{{x:.2f}}h<br>Relative: %{{y:.1f}}%<extra></extra>"
         ))
 
     fig2.update_layout(
@@ -128,13 +139,13 @@ if not df.empty:
         height=500,
         margin=dict(t=30),
         xaxis=dict(
-            title="Hour of Day (00:00 - 24:00)",
+            title="Hour of Day",
             tickmode='array',
             tickvals=[0, 3, 6, 9, 12, 15, 18, 21, 24],
             ticktext=['00:00', '03:00', '06:00', '09:00', '12:00', '15:00', '18:00', '21:00', '24:00'],
             range=[0, 24]
         ),
-        yaxis=dict(title="Depth (cm)"),
+        yaxis=dict(title="Daily Range (%)", range=[-5, 105]),
         legend=dict(title="Select Date", orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
     )
     st.plotly_chart(fig2, use_container_width=True)
