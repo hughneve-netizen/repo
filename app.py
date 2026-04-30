@@ -14,23 +14,21 @@ st.set_page_config(page_title="Nant Cledlyn Monitor", page_icon="🌊", layout="
 # 2. Database Connection
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# --- RAINFALL FETCHING (Forecast API captures "Recent" data better than Archive) ---
+# --- RAINFALL FETCHING ---
 @st.cache_data(ttl=3600)
 def fetch_rainfall_data(dates):
-    lat, lon = 52.0505, -4.3444 # SA40 9YD
-    # Open-Meteo Forecast API can provide up to 92 days of 'past_days'
+    lat, lon = 52.0505, -4.3444 
+    # Use forecast endpoint to ensure today/yesterday are included
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&timezone=GMT&past_days=92&forecast_days=1&models=ukmo_ukv"
-    
     try:
         response = requests.get(url).json()
         hourly = response.get('hourly', {})
-        rain_df = pd.DataFrame({
+        temp_df = pd.DataFrame({
             "timestamp": pd.to_datetime(hourly.get('time')),
             "rainfall": hourly.get('precipitation')
         })
-        # Filter to user selected range
-        mask = (rain_df['timestamp'].dt.date >= dates[0]) & (rain_df['timestamp'].dt.date <= dates[1])
-        return rain_df.loc[mask]
+        mask = (temp_df['timestamp'].dt.date >= dates[0]) & (temp_df['timestamp'].dt.date <= dates[1])
+        return temp_df.loc[mask]
     except:
         return pd.DataFrame()
 
@@ -46,7 +44,7 @@ def get_solar_events(start_date, end_date):
             cos_h = (math.sin(math.radians(-0.83)) - math.sin(math.radians(lat)) * math.sin(math.radians(decl))) / \
                     (math.cos(math.radians(lat)) * math.cos(math.radians(decl)))
             h = math.degrees(math.acos(cos_h))
-            noon = 12 - (lon / 15) + 1 # BST Offset
+            noon = 12 - (lon / 15) + 1 # BST
             base_dt = datetime.combine(curr_date, datetime.min.time())
             sunrises.append(base_dt + timedelta(hours=noon - (h / 15)))
             sunsets.append(base_dt + timedelta(hours=noon + (h / 15)))
@@ -111,14 +109,18 @@ if not df.empty:
 
     # --- PLOT 1: TIMELINE ---
     fig1 = go.Figure()
-
+    
+    # Initialize max_rain default
+    max_rain = 5
+    
     if show_rain:
         rain_df = fetch_rainfall_data(date_range)
         if not rain_df.empty:
+            max_rain = max(rain_df["rainfall"].max() * 2, 5)
             fig1.add_trace(go.Bar(
                 x=rain_df["timestamp"], y=rain_df["rainfall"],
                 name='Rain (mm)', yaxis='y2',
-                marker_color='rgba(51, 195, 240, 0.3)',
+                marker_color='rgba(51, 195, 240, 0.4)',
                 hovertemplate='%{y} mm'
             ))
 
@@ -131,9 +133,6 @@ if not df.empty:
         fig1.add_trace(go.Scatter(x=sunrises, y=[y_max]*len(sunrises), mode='markers', name='Sunrise', marker=dict(symbol='triangle-up', size=10, color='#FFD700'), hoverinfo='skip'))
         fig1.add_trace(go.Scatter(x=sunsets, y=[y_max]*len(sunsets), mode='markers', name='Sunset', marker=dict(symbol='triangle-down', size=10, color='#FF4500'), hoverinfo='skip'))
 
-    # Set Rain to hang from top (yaxis2)
-    max_rain = 5 if rain_df.empty else max(rain_df["rainfall"].max() * 2, 5)
-    
     fig1.update_layout(
         template="plotly_dark", height=450,
         xaxis=dict(rangeslider=dict(visible=True)),
@@ -141,7 +140,7 @@ if not df.empty:
         yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[max_rain, 0], showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
-    st.plotly_chart(fig1, use_container_width=True, key="timeline_chart")
+    st.plotly_chart(fig1, use_container_width=True)
 
     # --- PLOT 2: DIURNAL ---
     st.markdown("### 🕒 Diurnal Overlay (%)")
@@ -157,14 +156,17 @@ if not df.empty:
     fig2.add_trace(go.Scatter(x=agg_trend["time_of_day"], y=agg_trend["daily_pct"], name='Avg Trend', line=dict(color='red', width=4)))
     
     fig2.update_layout(template="plotly_dark", height=450, xaxis=dict(title="Hour of Day", range=[0, 24]), yaxis=dict(title="Daily Range (%)"))
-    st.plotly_chart(fig2, use_container_width=True, key="diurnal_chart")
+    st.plotly_chart(fig2, use_container_width=True)
 
-    # Download
+    # Download Button
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Download View CSV", data=csv, file_name="nant_cledlyn.csv", mime="text/csv")
+    
+    # Trigger refresh only after everything is rendered
+    time.sleep(refresh_rate)
+    st.rerun()
+
 else:
     st.info("No river data found. Try expanding the date range.")
-
-# 5. Heartbeat
-time.sleep(refresh_rate)
-st.rerun()
+    # Stop execution here if no data, preventing the rerun loop from firing empty charts
+    st.stop()
