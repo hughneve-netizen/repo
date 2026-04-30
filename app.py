@@ -118,7 +118,7 @@ df = fetch_filtered_data(date_range)
 
 if not df.empty:
     latest_time = df.iloc[-1]["timestamp"].strftime("%d %b %Y, %H:%M")
-    st.info(f"🕒 **Last Update:** {latest_time} UTC)
+    st.info(f"🕒 **Last Update:** {latest_time} UTC")
 
     # --- PLOT 1: TIMELINE ---
     fig1 = go.Figure()
