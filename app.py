@@ -117,7 +117,7 @@ if not df.empty:
     latest_time = latest_row["timestamp"].strftime("%d %b %Y, %H:%M")
     latest_val = latest_row["reading_value"]
     
-    st.success(f"✅ Data Active: Last update received at **{latest_time}**")
+    st.success(f"✅ Data Active: Last update received at **{latest_time}** UTC")
     
     m1, m2, m3 = st.columns(3)
     m1.metric("Latest Depth", f"{latest_val:.1f} cm")
