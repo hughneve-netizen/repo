@@ -14,22 +14,36 @@ st.set_page_config(page_title="Nant Cledlyn Monitor", page_icon="🌊", layout="
 # 2. Database Connection
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# --- RAINFALL FETCHING ---
+# --- ROBUST RAINFALL FETCHING ---
 @st.cache_data(ttl=3600)
 def fetch_rainfall_data(dates):
+    # SA40 9YD coordinates
     lat, lon = 52.0505, -4.3444 
-    # Use forecast endpoint to ensure today/yesterday are included
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&timezone=GMT&past_days=92&forecast_days=1&models=ukmo_ukv"
+    # Use the 'forecast' endpoint as it handles the most recent 92 days of 'past' data
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&timezone=GMT&past_days=7&forecast_days=1&models=ukmo_ukv"
+    
     try:
-        response = requests.get(url).json()
-        hourly = response.get('hourly', {})
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        hourly = r.json().get('hourly', {})
+        
+        if not hourly:
+            return pd.DataFrame()
+            
         temp_df = pd.DataFrame({
             "timestamp": pd.to_datetime(hourly.get('time')),
-            "rainfall": hourly.get('precipitation')
+            "rainfall": hourly.get('precipitation', [])
         })
+        
+        # Filter for the selected date range
         mask = (temp_df['timestamp'].dt.date >= dates[0]) & (temp_df['timestamp'].dt.date <= dates[1])
-        return temp_df.loc[mask]
-    except:
+        result = temp_df.loc[mask].copy()
+        
+        # If there is no rain in the period, the API returns zeros. 
+        # We only want to return the DF if it actually has content.
+        return result
+    except Exception as e:
+        st.sidebar.error(f"Weather API Error: {e}")
         return pd.DataFrame()
 
 # --- SOLAR CALCULATION ---
@@ -63,11 +77,11 @@ show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
 refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", 5, 60, 10)
 
-if st.sidebar.button("🔄 Force Refresh"):
+if st.sidebar.button("🔄 Force Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
-# --- DATA FETCHING ---
+# --- DATA FETCHING (Supabase) ---
 def fetch_paginated_data(query_builder):
     all_rows = []
     page_size, offset = 1000, 0
@@ -81,9 +95,12 @@ def fetch_paginated_data(query_builder):
 @st.cache_data(ttl=refresh_rate)
 def fetch_filtered_data(dates):
     if not isinstance(dates, (list, tuple)) or len(dates) != 2: return pd.DataFrame()
-    start_dt, end_dt = datetime.combine(dates[0], datetime.min.time()).isoformat(), datetime.combine(dates[1], datetime.max.time()).isoformat()
+    start_dt = datetime.combine(dates[0], datetime.min.time()).isoformat()
+    end_dt = datetime.combine(dates[1], datetime.max.time()).isoformat()
+    
     q = conn.table("sensor_data").select("*").gte("timestamp", start_dt).lte("timestamp", end_dt).order("timestamp", desc=True)
     df = fetch_paginated_data(q)
+    
     if not df.empty:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
@@ -91,13 +108,15 @@ def fetch_filtered_data(dates):
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
         df["date_label"] = df["timestamp"].dt.date.astype(str)
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60
+        
         daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
         df = df.merge(daily_stats, on="date_label")
         df["daily_pct"] = (df["reading_value"] - df["min"]) / (df["max"] - df["min"]) * 100
         df.loc[df["max"] == df["min"], "daily_pct"] = 0 
-    return df
+        return df
+    return pd.DataFrame()
 
-# 4. Main UI Execution
+# 4. UI Execution
 st.title("🌊 Nant Cledlyn Water Level Analysis")
 st.subheader("by Hugh Neve")
 
@@ -110,39 +129,56 @@ if not df.empty:
     # --- PLOT 1: TIMELINE ---
     fig1 = go.Figure()
     
-    # Initialize max_rain default
-    max_rain = 5
-    
+    # Rainfall Setup
+    rain_found = False
     if show_rain:
         rain_df = fetch_rainfall_data(date_range)
         if not rain_df.empty:
-            max_rain = max(rain_df["rainfall"].max() * 2, 5)
+            rain_found = True
+            # Calculate a dynamic range for yaxis2 (Rainfall)
+            # We want the rain bars to occupy the top 30% of the chart
+            max_r = max(rain_df["rainfall"].max(), 2) 
+            
             fig1.add_trace(go.Bar(
-                x=rain_df["timestamp"], y=rain_df["rainfall"],
-                name='Rain (mm)', yaxis='y2',
-                marker_color='rgba(51, 195, 240, 0.4)',
+                x=rain_df["timestamp"], 
+                y=rain_df["rainfall"],
+                name='Rain (mm)', 
+                yaxis='y2',
+                marker_color='rgba(100, 149, 237, 0.5)',
                 hovertemplate='%{y} mm'
             ))
+            st.sidebar.success(f"☔ Rainfall data loaded: {len(rain_df)} points")
+        else:
+            st.sidebar.warning("☔ No rainfall data returned from API.")
 
-    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Depth (cm)', line=dict(color='#33C3F0', width=2)))
-    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Trend', line=dict(color='#FFA500', dash='dot')))
+    # River Level Traces
+    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='River Depth (cm)', line=dict(color='#33C3F0', width=2)))
+    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Trend Line', line=dict(color='#FFA500', dash='dot')))
 
+    # Solar Markers
     if show_solar:
         sunrises, sunsets = get_solar_events(date_range[0], date_range[1])
-        y_max = df["reading_value"].max() * 1.05
-        fig1.add_trace(go.Scatter(x=sunrises, y=[y_max]*len(sunrises), mode='markers', name='Sunrise', marker=dict(symbol='triangle-up', size=10, color='#FFD700'), hoverinfo='skip'))
-        fig1.add_trace(go.Scatter(x=sunsets, y=[y_max]*len(sunsets), mode='markers', name='Sunset', marker=dict(symbol='triangle-down', size=10, color='#FF4500'), hoverinfo='skip'))
+        y_max_val = df["reading_value"].max() * 1.05
+        fig1.add_trace(go.Scatter(x=sunrises, y=[y_max_val]*len(sunrises), mode='markers', name='Sunrise', marker=dict(symbol='triangle-up', size=10, color='#FFD700'), hoverinfo='skip'))
+        fig1.add_trace(go.Scatter(x=sunsets, y=[y_max_val]*len(sunsets), mode='markers', name='Sunset', marker=dict(symbol='triangle-down', size=10, color='#FF4500'), hoverinfo='skip'))
 
+    # Update Layout with Dual Axis
     fig1.update_layout(
-        template="plotly_dark", height=450,
-        xaxis=dict(rangeslider=dict(visible=True)),
+        template="plotly_dark", height=500,
+        xaxis=dict(title="Date/Time", rangeslider=dict(visible=True)),
         yaxis=dict(title="River Depth (cm)", side="left"),
-        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[max_rain, 0], showgrid=False),
+        yaxis2=dict(
+            title="Rainfall (mm)", 
+            overlaying='y', 
+            side='right', 
+            range=[10, 0], # Inverted: rain hangs from top. 10mm max shown.
+            showgrid=False
+        ),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-    # --- PLOT 2: DIURNAL ---
+    # --- PLOT 2: DIURNAL OVERLAY ---
     st.markdown("### 🕒 Diurnal Overlay (%)")
     fig2 = go.Figure()
     unique_days = sorted(df["date_label"].unique())
@@ -155,18 +191,20 @@ if not df.empty:
     agg_trend = df.groupby(df["time_of_day"].round(1))["daily_pct"].mean().reset_index()
     fig2.add_trace(go.Scatter(x=agg_trend["time_of_day"], y=agg_trend["daily_pct"], name='Avg Trend', line=dict(color='red', width=4)))
     
-    fig2.update_layout(template="plotly_dark", height=450, xaxis=dict(title="Hour of Day", range=[0, 24]), yaxis=dict(title="Daily Range (%)"))
+    fig2.update_layout(
+        template="plotly_dark", height=450, 
+        xaxis=dict(title="Hour of Day (0-24)", range=[0, 24]), 
+        yaxis=dict(title="Daily Range (%)")
+    )
     st.plotly_chart(fig2, use_container_width=True)
 
-    # Download Button
+    # Download
     csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download View CSV", data=csv, file_name="nant_cledlyn.csv", mime="text/csv")
+    st.download_button("📥 Download View CSV", data=csv, file_name="nant_cledlyn_data.csv", mime="text/csv")
     
-    # Trigger refresh only after everything is rendered
     time.sleep(refresh_rate)
     st.rerun()
 
 else:
-    st.info("No river data found. Try expanding the date range.")
-    # Stop execution here if no data, preventing the rerun loop from firing empty charts
+    st.info("No river data found. Please check your Supabase connection or date range.")
     st.stop()
