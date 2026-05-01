@@ -81,19 +81,26 @@ def fetch_filtered_data(dates):
     start_dt, end_dt = datetime.combine(dates[0], datetime.min.time()).isoformat(), datetime.combine(dates[1], datetime.max.time()).isoformat()
     q = conn.table("sensor_data").select("*").gte("timestamp", start_dt).lte("timestamp", end_dt).order("timestamp", desc=True)
     df = fetch_paginated_data(q)
+    
     if not df.empty:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
-        df = df.dropna(subset=['reading_value']).sort_values("timestamp")
+        df = df.dropna(subset=['reading_value']).sort_values("timestamp").reset_index(drop=True)
         
         # MATH: Rolling Average
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
         
-        # MATH: Rate of Change (Rise/Fall per minute)
-        df["diff"] = df["reading_value"].diff()
-        df["time_diff_min"] = df["timestamp"].diff().dt.total_seconds() / 60
-        df["roc"] = (df["diff"] / df["time_diff_min"]).fillna(0)
+        # MATH: Central Difference RoC (5 samples before and after)
+        # Shift the values to get data from t+5 and t-5
+        val_future = df["reading_value"].shift(-5)
+        val_past = df["reading_value"].shift(5)
+        time_future = df["timestamp"].shift(-5)
+        time_past = df["timestamp"].shift(5)
         
+        time_diff_min = (time_future - time_past).dt.total_seconds() / 60
+        df["roc"] = (val_future - val_past) / time_diff_min
+        
+        # Standard metadata for other plots
         df["date_label"] = df["timestamp"].dt.date.astype(str)
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60
         daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
@@ -135,15 +142,15 @@ if not df.empty:
 
     fig1.update_layout(
         template="plotly_dark", height=400, margin=dict(t=20, b=20),
-        xaxis=dict(showticklabels=False), # Hide x-axis labels to stack with RoC chart
+        xaxis=dict(showticklabels=False),
         yaxis=dict(title="River Depth (cm)", side="left"),
         yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-    # --- PLOT 2: RATE OF CHANGE (DEDICATED CHART) ---
-    st.markdown("### ⚡ Rate of Change (Rise / Fall Velocity)")
+    # --- PLOT 2: RATE OF CHANGE (11-SAMPLE WINDOW) ---
+    st.markdown("### ⚡ Velocity of Rise / Fall (Centered 11-Sample Window)")
     fig_roc = go.Figure()
     fig_roc.add_trace(go.Scatter(
         x=df["timestamp"], y=df["roc"],
@@ -153,7 +160,6 @@ if not df.empty:
         fillcolor='rgba(255, 75, 75, 0.1)'
     ))
     
-    # Add a zero line for reference
     fig_roc.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
 
     fig_roc.update_layout(
