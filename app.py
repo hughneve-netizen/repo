@@ -49,7 +49,7 @@ def get_solar_events(start_date, end_date):
         curr_date += timedelta(days=1)
     return sunrises, sunsets
 
-# 3. Sidebar
+# 3. Sidebar Controls
 st.sidebar.header("🎛️ Dashboard Controls")
 MIN_DATA_DATE = datetime(2026, 4, 11).date()
 today = datetime.now().date()
@@ -64,7 +64,7 @@ if st.sidebar.button("🔄 Force Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
-# --- DATA FETCHING ---
+# --- DATA FETCHING (Supabase) ---
 def fetch_paginated_data(query_builder):
     all_rows = []
     page_size, offset = 1000, 0
@@ -91,7 +91,6 @@ def fetch_filtered_data(dates):
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
         
         # MATH: Central Difference RoC (5 samples before and after)
-        # Shift the values to get data from t+5 and t-5
         val_future = df["reading_value"].shift(-5)
         val_past = df["reading_value"].shift(5)
         time_future = df["timestamp"].shift(-5)
@@ -100,7 +99,6 @@ def fetch_filtered_data(dates):
         time_diff_min = (time_future - time_past).dt.total_seconds() / 60
         df["roc"] = (val_future - val_past) / time_diff_min
         
-        # Standard metadata for other plots
         df["date_label"] = df["timestamp"].dt.date.astype(str)
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60
         daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
@@ -115,6 +113,7 @@ st.title("🌊 Nant Cledlyn Water Level Analysis")
 st.subheader("by Hugh Neve")
 
 df = fetch_filtered_data(date_range)
+rain_df = fetch_rainfall_data(date_range) if show_rain else pd.DataFrame()
 
 if not df.empty:
     latest_time = df.iloc[-1]["timestamp"].strftime("%d %b %Y, %H:%M")
@@ -123,13 +122,11 @@ if not df.empty:
     # --- PLOT 1: TIMELINE (DEPTH & RAIN) ---
     st.markdown("### 📈 Chronological Depth & Rainfall")
     fig1 = go.Figure()
-    
     rain_max_val = 5
-    if show_rain:
-        rain_df = fetch_rainfall_data(date_range)
-        if not rain_df.empty:
-            rain_max_val = max(rain_df["rainfall"].max() * 1.5, 5)
-            fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
+    
+    if not rain_df.empty:
+        rain_max_val = max(rain_df["rainfall"].max() * 1.5, 5)
+        fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
 
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='River Depth (cm)', line=dict(color='#33C3F0', width=2)))
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Smooth Trend', line=dict(color='#FFA500', dash='dot')))
@@ -149,9 +146,20 @@ if not df.empty:
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-    # --- PLOT 2: RATE OF CHANGE (11-SAMPLE WINDOW) ---
-    st.markdown("### ⚡ Velocity of Rise / Fall (Centered 11-Sample Window)")
+    # --- PLOT 2: RATE OF CHANGE (DEDICATED CHART WITH RAIN) ---
+    st.markdown("### ⚡ Velocity of Rise / Fall with Rainfall Overlay")
     fig_roc = go.Figure()
+    
+    # Add Rainfall to RoC Plot
+    if not rain_df.empty:
+        fig_roc.add_trace(go.Bar(
+            x=rain_df["timestamp"], y=rain_df["rainfall"],
+            name='Rain (mm)', yaxis='y2',
+            marker_color='rgba(100, 149, 237, 0.2)', # Fainter for background
+            hovertemplate='Rain: %{y}mm'
+        ))
+
+    # Add RoC Line
     fig_roc.add_trace(go.Scatter(
         x=df["timestamp"], y=df["roc"],
         name='RoC (cm/min)',
@@ -163,9 +171,10 @@ if not df.empty:
     fig_roc.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
 
     fig_roc.update_layout(
-        template="plotly_dark", height=250, margin=dict(t=10, b=10),
+        template="plotly_dark", height=300, margin=dict(t=10, b=10),
         xaxis=dict(title="Time"),
-        yaxis=dict(title="cm / min"),
+        yaxis=dict(title="Velocity (cm / min)", side="left"),
+        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
         showlegend=False
     )
     st.plotly_chart(fig_roc, use_container_width=True)
@@ -190,6 +199,6 @@ if not df.empty:
     st.rerun()
 
 else:
-    st.info("No river data found. Defaulting to 11 April 2026.")
+    st.info("No river data found for the current selection.")
     time.sleep(refresh_rate)
     st.rerun()
