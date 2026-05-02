@@ -16,7 +16,7 @@ conn = st.connection("supabase", type=SupabaseConnection)
 
 # --- RAINFALL FETCHING ---
 @st.cache_data(ttl=3600)
-def fetch_rainfall_data(dates):
+def fetch_rainfall_data(dates, max_timestamp):
     lat, lon = 52.0505, -4.3444 
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&timezone=GMT&past_days=31&forecast_days=1"
     try:
@@ -24,8 +24,18 @@ def fetch_rainfall_data(dates):
         r.raise_for_status()
         hourly = r.json().get('hourly', {})
         if not hourly: return pd.DataFrame()
-        temp_df = pd.DataFrame({"timestamp": pd.to_datetime(hourly.get('time')), "rainfall": hourly.get('precipitation', [])})
-        mask = (temp_df['timestamp'].dt.date >= dates[0]) & (temp_df['timestamp'].dt.date <= dates[1])
+        
+        temp_df = pd.DataFrame({
+            "timestamp": pd.to_datetime(hourly.get('time')), 
+            "rainfall": hourly.get('precipitation', [])
+        })
+        
+        # --- FIX: CLIP RAIN TO THE LATEST RIVER DATA TIMESTAMP ---
+        # This prevents rain from showing in the "future" relative to your sensor
+        mask = (temp_df['timestamp'].dt.date >= dates[0]) & \
+               (temp_df['timestamp'].dt.date <= dates[1]) & \
+               (temp_df['timestamp'] <= max_timestamp)
+        
         return temp_df.loc[mask].copy()
     except: return pd.DataFrame()
 
@@ -87,7 +97,6 @@ def fetch_filtered_data(dates):
         df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
         df = df.dropna(subset=['reading_value']).sort_values("timestamp").reset_index(drop=True)
         
-        # MATH: Rolling Average
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
         
         # MATH: Central Difference RoC (5 samples before and after)
@@ -113,11 +122,14 @@ st.title("🌊 Nant Cledlyn Water Level Analysis")
 st.subheader("by Hugh Neve")
 
 df = fetch_filtered_data(date_range)
-rain_df = fetch_rainfall_data(date_range) if show_rain else pd.DataFrame()
 
 if not df.empty:
-    latest_time = df.iloc[-1]["timestamp"].strftime("%d %b %Y, %H:%M")
+    max_sensor_time = df["timestamp"].max()
+    latest_time = max_sensor_time.strftime("%d %b %Y, %H:%M")
     st.info(f"🕒 **Last Update:** {latest_time} | Records Viewable: {len(df):,}")
+
+    # Fetch rain only up to the sensor max time
+    rain_df = fetch_rainfall_data(date_range, max_sensor_time) if show_rain else pd.DataFrame()
 
     # --- PLOT 1: TIMELINE (DEPTH & RAIN) ---
     st.markdown("### 📈 Chronological Depth & Rainfall")
@@ -125,7 +137,8 @@ if not df.empty:
     rain_max_val = 5
     
     if not rain_df.empty:
-        rain_max_val = max(rain_df["rainfall"].max() * 1.5, 5)
+        actual_max_rain = rain_df["rainfall"].max()
+        rain_max_val = max(actual_max_rain * 2, 5) # Scale rain axis relative to its max
         fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
 
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='River Depth (cm)', line=dict(color='#33C3F0', width=2)))
@@ -146,20 +159,18 @@ if not df.empty:
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-    # --- PLOT 2: RATE OF CHANGE (DEDICATED CHART WITH RAIN) ---
+    # --- PLOT 2: RATE OF CHANGE ---
     st.markdown("### ⚡ Velocity of Rise / Fall with Rainfall Overlay")
     fig_roc = go.Figure()
     
-    # Add Rainfall to RoC Plot
     if not rain_df.empty:
         fig_roc.add_trace(go.Bar(
             x=rain_df["timestamp"], y=rain_df["rainfall"],
             name='Rain (mm)', yaxis='y2',
-            marker_color='rgba(100, 149, 237, 0.2)', # Fainter for background
+            marker_color='rgba(100, 149, 237, 0.2)',
             hovertemplate='Rain: %{y}mm'
         ))
 
-    # Add RoC Line
     fig_roc.add_trace(go.Scatter(
         x=df["timestamp"], y=df["roc"],
         name='RoC (cm/min)',
