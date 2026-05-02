@@ -14,6 +14,38 @@ st.set_page_config(page_title="Nant Cledlyn Monitor", page_icon="🌊", layout="
 # 2. Database Connection
 conn = st.connection("supabase", type=SupabaseConnection)
 
+# --- HYDROLOGICAL ANALYSIS FUNCTIONS ---
+def estimate_lag_time(df, rain_df):
+    """Calculates hours between peak rain and peak river rise velocity."""
+    if df.empty or rain_df.empty: return None
+    # Find significant rain (>0.5mm) in the current view
+    sig_rain = rain_df[rain_df['rainfall'] > 0.5]
+    if sig_rain.empty: return "No heavy rain in view"
+    
+    # Get the latest rain peak
+    rain_peak_time = sig_rain.loc[sig_rain['rainfall'].idxmax(), 'timestamp']
+    
+    # Find the maximum Rate of Change in the 12 hours following that rain
+    response_window = df[(df['timestamp'] > rain_peak_time) & 
+                         (df['timestamp'] < rain_peak_time + timedelta(hours=12))]
+    
+    if response_window.empty or response_window['roc'].max() <= 0:
+        return "Awaiting river response..."
+    
+    river_peak_time = response_window.loc[response_window['roc'].idxmax(), 'timestamp']
+    lag_hrs = (river_peak_time - rain_peak_time).total_seconds() / 3600
+    return round(lag_hrs, 2)
+
+def estimate_recession_index(df):
+    """Calculates the drainage constant (k) if river is falling."""
+    if df.empty or len(df) < 24: return None
+    recent = df.tail(24) # Look at last ~2-4 hours of data
+    if recent['roc'].mean() < 0:
+        # k = abs(mean RoC / mean Depth)
+        k = abs(recent['roc'].mean() / recent['reading_value'].mean())
+        return round(k, 4)
+    return "Steady/Rising"
+
 # --- RAINFALL FETCHING ---
 @st.cache_data(ttl=3600)
 def fetch_rainfall_data(dates):
@@ -146,28 +178,13 @@ if not df.empty:
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-    # --- PLOT 2: RATE OF CHANGE (DEDICATED CHART WITH RAIN) ---
+    # --- PLOT 2: RATE OF CHANGE ---
     st.markdown("### ⚡ Velocity of Rise / Fall with Rainfall Overlay")
     fig_roc = go.Figure()
-    
-    # Add Rainfall to RoC Plot
     if not rain_df.empty:
-        fig_roc.add_trace(go.Bar(
-            x=rain_df["timestamp"], y=rain_df["rainfall"],
-            name='Rain (mm)', yaxis='y2',
-            marker_color='rgba(100, 149, 237, 0.2)', # Fainter for background
-            hovertemplate='Rain: %{y}mm'
-        ))
+        fig_roc.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.2)', hovertemplate='Rain: %{y}mm'))
 
-    # Add RoC Line
-    fig_roc.add_trace(go.Scatter(
-        x=df["timestamp"], y=df["roc"],
-        name='RoC (cm/min)',
-        line=dict(color='#FF4B4B', width=1.5),
-        fill='tozeroy',
-        fillcolor='rgba(255, 75, 75, 0.1)'
-    ))
-    
+    fig_roc.add_trace(go.Scatter(x=df["timestamp"], y=df["roc"], name='RoC (cm/min)', line=dict(color='#FF4B4B', width=1.5), fill='tozeroy', fillcolor='rgba(255, 75, 75, 0.1)'))
     fig_roc.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
 
     fig_roc.update_layout(
@@ -192,6 +209,23 @@ if not df.empty:
     fig2.add_trace(go.Scatter(x=agg_trend["time_of_day"], y=agg_trend["daily_pct"], name='Avg Trend', line=dict(color='red', width=4)))
     fig2.update_layout(template="plotly_dark", height=450, xaxis=dict(title="Hour of Day (0-24)", range=[0, 24]), yaxis=dict(title="Daily Range (%)"))
     st.plotly_chart(fig2, use_container_width=True)
+
+    # --- NEW: HYDROLOGICAL INTELLIGENCE SECTION ---
+    st.markdown("---")
+    st.header("🧠 Hydrological Catchment Intelligence")
+    
+    lag_val = estimate_lag_time(df, rain_df)
+    k_val = estimate_recession_index(df)
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Estimated Catchment Lag", f"{lag_val} Hours" if isinstance(lag_val, float) else lag_val)
+        st.caption("The delay between peak rainfall and the peak rate of river rise.")
+    with c2:
+        st.metric("Recession Index (k)", f"{k_val}" if isinstance(k_val, float) else k_val)
+        st.caption("The rate of drainage (higher = faster drainage).")
+        
+    st.info("**Hydrologist's Tip:** A lag time under 3 hours indicates a 'flashy' river prone to rapid floods.")
 
     st.download_button("📥 Download View CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="nant_cledlyn.csv", mime="text/csv")
     
