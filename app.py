@@ -147,7 +147,7 @@ def fetch_filtered_data(dates):
     return pd.DataFrame()
 
 # 4. UI Execution
-st.title("🌊 Nant Cledlyn Water Level Analysis")
+st.title("🌊 Nant Cledlyn Water Level Analysis: Dre-fach, Ceredigion")
 st.subheader("by Hugh Neve")
 
 df = fetch_filtered_data(date_range)
