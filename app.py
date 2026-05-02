@@ -14,36 +14,20 @@ st.set_page_config(page_title="Nant Cledlyn Monitor", page_icon="🌊", layout="
 # 2. Database Connection
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# --- RESILIENT RAINFALL FETCHING ---
+# --- RAINFALL FETCHING ---
 @st.cache_data(ttl=3600)
-def fetch_rainfall_data(dates, max_timestamp):
-    lat, lon = 52.0505, -4.3444
-    
-    # Try multiple endpoints in case one is down
-    endpoints = [
-        f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&timezone=GMT&past_days=31&forecast_days=1",
-        f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={dates[0]}&end_date={dates[1]}&hourly=precipitation"
-    ]
-    
-    for url in endpoints:
-        try:
-            r = requests.get(url, timeout=5)
-            if r.status_code == 200:
-                hourly = r.json().get('hourly', {})
-                if hourly and 'time' in hourly:
-                    temp_df = pd.DataFrame({
-                        "timestamp": pd.to_datetime(hourly.get('time')), 
-                        "rainfall": hourly.get('precipitation', [])
-                    })
-                    # Clip to sensor data range
-                    mask = (temp_df['timestamp'].dt.date >= dates[0]) & \
-                           (temp_df['timestamp'].dt.date <= dates[1]) & \
-                           (temp_df['timestamp'] <= max_timestamp)
-                    return temp_df.loc[mask].copy()
-        except Exception:
-            continue # Try next endpoint
-            
-    return pd.DataFrame()
+def fetch_rainfall_data(dates):
+    lat, lon = 52.0505, -4.3444 
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&timezone=GMT&past_days=31&forecast_days=1"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        hourly = r.json().get('hourly', {})
+        if not hourly: return pd.DataFrame()
+        temp_df = pd.DataFrame({"timestamp": pd.to_datetime(hourly.get('time')), "rainfall": hourly.get('precipitation', [])})
+        mask = (temp_df['timestamp'].dt.date >= dates[0]) & (temp_df['timestamp'].dt.date <= dates[1])
+        return temp_df.loc[mask].copy()
+    except: return pd.DataFrame()
 
 # --- SOLAR CALCULATION ---
 def get_solar_events(start_date, end_date):
@@ -103,12 +87,17 @@ def fetch_filtered_data(dates):
         df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
         df = df.dropna(subset=['reading_value']).sort_values("timestamp").reset_index(drop=True)
         
+        # MATH: Rolling Average
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
         
-        # Central Difference RoC (5 sample window)
-        v_f, v_p = df["reading_value"].shift(-5), df["reading_value"].shift(5)
-        t_f, t_p = df["timestamp"].shift(-5), df["timestamp"].shift(5)
-        df["roc"] = (v_f - v_p) / ((t_f - t_p).dt.total_seconds() / 60)
+        # MATH: Central Difference RoC (5 samples before and after)
+        val_future = df["reading_value"].shift(-5)
+        val_past = df["reading_value"].shift(5)
+        time_future = df["timestamp"].shift(-5)
+        time_past = df["timestamp"].shift(5)
+        
+        time_diff_min = (time_future - time_past).dt.total_seconds() / 60
+        df["roc"] = (val_future - val_past) / time_diff_min
         
         df["date_label"] = df["timestamp"].dt.date.astype(str)
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60
@@ -119,27 +108,27 @@ def fetch_filtered_data(dates):
         return df
     return pd.DataFrame()
 
-# 4. Main UI
+# 4. UI Execution
 st.title("🌊 Nant Cledlyn Water Level Analysis")
 st.subheader("by Hugh Neve")
 
 df = fetch_filtered_data(date_range)
+rain_df = fetch_rainfall_data(date_range) if show_rain else pd.DataFrame()
 
 if not df.empty:
-    max_sensor_time = df["timestamp"].max()
-    st.info(f"🕒 **Last Update:** {max_sensor_time.strftime('%d %b %Y, %H:%M')} | Records: {len(df):,}")
+    latest_time = df.iloc[-1]["timestamp"].strftime("%d %b %Y, %H:%M")
+    st.info(f"🕒 **Last Update:** {latest_time} | Records Viewable: {len(df):,}")
 
-    rain_df = fetch_rainfall_data(date_range, max_sensor_time) if show_rain else pd.DataFrame()
-
-    # --- PLOT 1: TIMELINE ---
+    # --- PLOT 1: TIMELINE (DEPTH & RAIN) ---
+    st.markdown("### 📈 Chronological Depth & Rainfall")
     fig1 = go.Figure()
-    rain_max = 5
+    rain_max_val = 5
     
     if not rain_df.empty:
-        rain_max = max(rain_df["rainfall"].max() * 2.5, 5)
+        rain_max_val = max(rain_df["rainfall"].max() * 1.5, 5)
         fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
 
-    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Depth (cm)', line=dict(color='#33C3F0', width=2)))
+    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='River Depth (cm)', line=dict(color='#33C3F0', width=2)))
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Smooth Trend', line=dict(color='#FFA500', dash='dot')))
 
     if show_solar:
@@ -152,25 +141,40 @@ if not df.empty:
         template="plotly_dark", height=400, margin=dict(t=20, b=20),
         xaxis=dict(showticklabels=False),
         yaxis=dict(title="River Depth (cm)", side="left"),
-        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max, 0], showgrid=False),
+        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-    # --- PLOT 2: RATE OF CHANGE ---
+    # --- PLOT 2: RATE OF CHANGE (DEDICATED CHART WITH RAIN) ---
     st.markdown("### ⚡ Velocity of Rise / Fall with Rainfall Overlay")
     fig_roc = go.Figure()
+    
+    # Add Rainfall to RoC Plot
     if not rain_df.empty:
-        fig_roc.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.2)', hovertemplate='Rain: %{y}mm'))
+        fig_roc.add_trace(go.Bar(
+            x=rain_df["timestamp"], y=rain_df["rainfall"],
+            name='Rain (mm)', yaxis='y2',
+            marker_color='rgba(100, 149, 237, 0.2)', # Fainter for background
+            hovertemplate='Rain: %{y}mm'
+        ))
 
-    fig_roc.add_trace(go.Scatter(x=df["timestamp"], y=df["roc"], name='RoC (cm/min)', line=dict(color='#FF4B4B', width=1.5), fill='tozeroy', fillcolor='rgba(255, 75, 75, 0.1)'))
+    # Add RoC Line
+    fig_roc.add_trace(go.Scatter(
+        x=df["timestamp"], y=df["roc"],
+        name='RoC (cm/min)',
+        line=dict(color='#FF4B4B', width=1.5),
+        fill='tozeroy',
+        fillcolor='rgba(255, 75, 75, 0.1)'
+    ))
+    
     fig_roc.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
 
     fig_roc.update_layout(
         template="plotly_dark", height=300, margin=dict(t=10, b=10),
         xaxis=dict(title="Time"),
         yaxis=dict(title="Velocity (cm / min)", side="left"),
-        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max, 0], showgrid=False),
+        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
         showlegend=False
     )
     st.plotly_chart(fig_roc, use_container_width=True)
@@ -193,7 +197,8 @@ if not df.empty:
     
     time.sleep(refresh_rate)
     st.rerun()
+
 else:
-    st.info("Searching for river data... (Check date range is set to include April 2026)")
+    st.info("No river data found for the current selection.")
     time.sleep(refresh_rate)
     st.rerun()
