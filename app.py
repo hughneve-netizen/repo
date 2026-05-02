@@ -14,39 +14,36 @@ st.set_page_config(page_title="Nant Cledlyn Monitor", page_icon="🌊", layout="
 # 2. Database Connection
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# --- SMART RAINFALL FETCHING ---
+# --- RESILIENT RAINFALL FETCHING ---
 @st.cache_data(ttl=3600)
 def fetch_rainfall_data(dates, max_timestamp):
-    lat, lon = 52.0505, -4.3444 # SA40 9YD
+    lat, lon = 52.0505, -4.3444
     
-    # 'best_available' prevents the 400 error by mixing models automatically
-    # 'past_days=31' ensures we cover the whole month if requested
-    url = (
-        f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-        f"&hourly=precipitation&timezone=GMT&past_days=31&forecast_days=1"
-        f"&models=best_available"
-    )
+    # Try multiple endpoints in case one is down
+    endpoints = [
+        f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&timezone=GMT&past_days=31&forecast_days=1",
+        f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={dates[0]}&end_date={dates[1]}&hourly=precipitation"
+    ]
     
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        hourly = r.json().get('hourly', {})
-        if not hourly: return pd.DataFrame()
-        
-        temp_df = pd.DataFrame({
-            "timestamp": pd.to_datetime(hourly.get('time')), 
-            "rainfall": hourly.get('precipitation', [])
-        })
-        
-        # Clip rain so it doesn't show in the "future" relative to sensor data
-        mask = (temp_df['timestamp'].dt.date >= dates[0]) & \
-               (temp_df['timestamp'].dt.date <= dates[1]) & \
-               (temp_df['timestamp'] <= max_timestamp)
-        
-        return temp_df.loc[mask].copy()
-    except Exception as e:
-        st.sidebar.warning(f"Rainfall API currently unavailable.")
-        return pd.DataFrame()
+    for url in endpoints:
+        try:
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                hourly = r.json().get('hourly', {})
+                if hourly and 'time' in hourly:
+                    temp_df = pd.DataFrame({
+                        "timestamp": pd.to_datetime(hourly.get('time')), 
+                        "rainfall": hourly.get('precipitation', [])
+                    })
+                    # Clip to sensor data range
+                    mask = (temp_df['timestamp'].dt.date >= dates[0]) & \
+                           (temp_df['timestamp'].dt.date <= dates[1]) & \
+                           (temp_df['timestamp'] <= max_timestamp)
+                    return temp_df.loc[mask].copy()
+        except Exception:
+            continue # Try next endpoint
+            
+    return pd.DataFrame()
 
 # --- SOLAR CALCULATION ---
 def get_solar_events(start_date, end_date):
@@ -60,7 +57,7 @@ def get_solar_events(start_date, end_date):
             cos_h = (math.sin(math.radians(-0.83)) - math.sin(math.radians(lat)) * math.sin(math.radians(decl))) / \
                     (math.cos(math.radians(lat)) * math.cos(math.radians(decl)))
             h = math.degrees(math.acos(cos_h))
-            noon = 12 - (lon / 15) + 1 # BST Offset
+            noon = 12 - (lon / 15) + 1 # BST
             base_dt = datetime.combine(curr_date, datetime.min.time())
             sunrises.append(base_dt + timedelta(hours=noon - (h / 15)))
             sunsets.append(base_dt + timedelta(hours=noon + (h / 15)))
@@ -108,10 +105,10 @@ def fetch_filtered_data(dates):
         
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
         
-        # Central Difference RoC (5 samples window)
-        v_future, v_past = df["reading_value"].shift(-5), df["reading_value"].shift(5)
-        t_future, t_past = df["timestamp"].shift(-5), df["timestamp"].shift(5)
-        df["roc"] = (v_future - v_past) / ((t_future - t_past).dt.total_seconds() / 60)
+        # Central Difference RoC (5 sample window)
+        v_f, v_p = df["reading_value"].shift(-5), df["reading_value"].shift(5)
+        t_f, t_p = df["timestamp"].shift(-5), df["timestamp"].shift(5)
+        df["roc"] = (v_f - v_p) / ((t_f - t_p).dt.total_seconds() / 60)
         
         df["date_label"] = df["timestamp"].dt.date.astype(str)
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60
@@ -135,12 +132,11 @@ if not df.empty:
     rain_df = fetch_rainfall_data(date_range, max_sensor_time) if show_rain else pd.DataFrame()
 
     # --- PLOT 1: TIMELINE ---
-    st.markdown("### 📈 Chronological Depth & Rainfall")
     fig1 = go.Figure()
-    rain_max_val = 5
+    rain_max = 5
     
     if not rain_df.empty:
-        rain_max_val = max(rain_df["rainfall"].max() * 2.5, 5)
+        rain_max = max(rain_df["rainfall"].max() * 2.5, 5)
         fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
 
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Depth (cm)', line=dict(color='#33C3F0', width=2)))
@@ -156,7 +152,7 @@ if not df.empty:
         template="plotly_dark", height=400, margin=dict(t=20, b=20),
         xaxis=dict(showticklabels=False),
         yaxis=dict(title="River Depth (cm)", side="left"),
-        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
+        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max, 0], showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig1, use_container_width=True)
@@ -174,7 +170,7 @@ if not df.empty:
         template="plotly_dark", height=300, margin=dict(t=10, b=10),
         xaxis=dict(title="Time"),
         yaxis=dict(title="Velocity (cm / min)", side="left"),
-        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
+        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max, 0], showgrid=False),
         showlegend=False
     )
     st.plotly_chart(fig_roc, use_container_width=True)
@@ -198,6 +194,6 @@ if not df.empty:
     time.sleep(refresh_rate)
     st.rerun()
 else:
-    st.info("Searching for river data...")
+    st.info("Searching for river data... (Check date range is set to include April 2026)")
     time.sleep(refresh_rate)
     st.rerun()
