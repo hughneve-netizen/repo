@@ -50,7 +50,6 @@ def estimate_recession_index(df):
     """Calculates the drainage constant (k) if river is falling."""
     if df.empty or len(df) < 24: return None
     recent = df.tail(24) 
-    # Use dropna to ensure we aren't averaging NA values
     valid_roc = recent['roc'].dropna()
     if not valid_roc.empty and valid_roc.mean() < 0:
         k = abs(valid_roc.mean() / recent['reading_value'].mean())
@@ -133,7 +132,6 @@ def fetch_filtered_data(dates):
         
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
         
-        # RoC calculation
         val_future = df["reading_value"].shift(-5)
         val_past = df["reading_value"].shift(5)
         time_future = df["timestamp"].shift(-5)
@@ -159,8 +157,9 @@ df = fetch_filtered_data(date_range)
 rain_df = fetch_rainfall_data(date_range) if show_rain else pd.DataFrame()
 
 if not df.empty:
+    # ADDED "UTC" label here
     latest_time = df.iloc[-1]["timestamp"].strftime("%d %b %Y, %H:%M")
-    st.info(f"🕒 **Last Update:** {latest_time} | Records Viewable: {len(df):,}")
+    st.info(f"🕒 **Last Update:** {latest_time} UTC | Records Viewable: {len(df):,}")
 
     # Plot 1
     st.markdown("### 📈 Chronological Depth & Rainfall")
