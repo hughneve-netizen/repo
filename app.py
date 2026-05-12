@@ -168,7 +168,7 @@ if not df.empty:
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Actual Depth (cm)', line=dict(color='#33C3F0', width=2)))
     
     if show_diurnal_removed:
-        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["anomaly_depth"], name='Anomaly (Diurnal Removed %)', line=dict(color='#C70039', width=1.5, dash='dash')))
+        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["anomaly_depth"], name='Anomaly (Diurnal Removed %)', line=dict(color='#C70039', width=0.5, dash='dot')))
 
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Smooth Trend', line=dict(color='#FFA500', dash='dot')))
 
