@@ -16,38 +16,24 @@ conn = st.connection("supabase", type=SupabaseConnection)
 
 # --- HYDROLOGICAL ANALYSIS FUNCTIONS ---
 def estimate_lag_time(df, rain_df):
-    """Calculates hours between peak rain and peak river rise velocity."""
     if df.empty or rain_df.empty: return None
-    
-    # Find significant rain (>0.5mm) in the current view
     sig_rain = rain_df[rain_df['rainfall'] > 0.5].copy()
     if sig_rain.empty: return "No heavy rain in view"
-    
-    # Force naive timestamps to avoid timezone comparison errors
     sig_rain['timestamp'] = sig_rain['timestamp'].dt.tz_localize(None)
     rain_peak_time = sig_rain.loc[sig_rain['rainfall'].idxmax(), 'timestamp']
-    
     df_compare = df.copy()
     df_compare['timestamp'] = df_compare['timestamp'].dt.tz_localize(None)
-    
-    # Find response window in the 12 hours following rain peak
     response_window = df_compare[(df_compare['timestamp'] > rain_peak_time) & 
                                  (df_compare['timestamp'] < rain_peak_time + timedelta(hours=12))]
-    
-    # SAFETY CHECK: Ensure we have at least one non-NA 'roc' value to analyze
     if response_window.empty or response_window['roc'].dropna().empty:
         return "Awaiting river response..."
-    
-    # Check if the peak response is actually a rise (positive RoC)
     if response_window['roc'].max() <= 0:
         return "No significant rise detected"
-    
     river_peak_time = response_window.loc[response_window['roc'].idxmax(), 'timestamp']
     lag_hrs = (river_peak_time - rain_peak_time).total_seconds() / 3600
     return round(lag_hrs, 2)
 
 def estimate_recession_index(df):
-    """Calculates the drainage constant (k) if river is falling."""
     if df.empty or len(df) < 24: return None
     recent = df.tail(24) 
     valid_roc = recent['roc'].dropna()
@@ -99,6 +85,7 @@ today = datetime.now().date()
 date_range = st.sidebar.date_input("Select Date Range", value=(MIN_DATA_DATE, today), min_value=MIN_DATA_DATE, max_value=today)
 
 show_rain = st.sidebar.checkbox("Overlay Rainfall Data", value=True)
+show_diurnal_removed = st.sidebar.checkbox("Subtract Diurnal Average", value=True)
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
 refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", 5, 60, 10)
@@ -130,15 +117,21 @@ def fetch_filtered_data(dates):
         df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
         df = df.dropna(subset=['reading_value']).sort_values("timestamp").reset_index(drop=True)
         
+        # MATH: Rolling Average
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
         
-        val_future = df["reading_value"].shift(-5)
-        val_past = df["reading_value"].shift(5)
-        time_future = df["timestamp"].shift(-5)
-        time_past = df["timestamp"].shift(5)
+        # MATH: Rate of Change
+        val_future, val_past = df["reading_value"].shift(-5), df["reading_value"].shift(5)
+        t_future, t_past = df["timestamp"].shift(-5), df["timestamp"].shift(5)
+        df["roc"] = (val_future - val_past) / ((t_future - t_past).dt.total_seconds() / 60)
         
-        time_diff_min = (time_future - time_past).dt.total_seconds() / 60
-        df["roc"] = (val_future - val_past) / time_diff_min
+        # MATH: Diurnal Subtraction
+        # 1. Map each row to a 'minute of day' (0-1439)
+        df["min_of_day"] = df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute
+        # 2. Calculate average depth for every minute across the whole dataset
+        diurnal_map = df.groupby("min_of_day")["reading_value"].transform("mean")
+        # 3. Subtract it
+        df["anomaly_depth"] = df["reading_value"] - diurnal_map
         
         df["date_label"] = df["timestamp"].dt.date.astype(str)
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60
@@ -157,7 +150,6 @@ df = fetch_filtered_data(date_range)
 rain_df = fetch_rainfall_data(date_range) if show_rain else pd.DataFrame()
 
 if not df.empty:
-    # ADDED "UTC" label here
     latest_time = df.iloc[-1]["timestamp"].strftime("%d %b %Y, %H:%M")
     st.info(f"🕒 **Last Update:** {latest_time} UTC | Records Viewable: {len(df):,}")
 
@@ -169,7 +161,11 @@ if not df.empty:
         rain_max_val = max(rain_df["rainfall"].max() * 1.5, 5)
         fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
 
-    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='River Depth (cm)', line=dict(color='#33C3F0', width=2)))
+    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Actual Depth (cm)', line=dict(color='#33C3F0', width=2)))
+    
+    if show_diurnal_removed:
+        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["anomaly_depth"], name='Anomaly (Diurnal Removed)', line=dict(color='#C70039', width=1.5, dash='dash')))
+
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Smooth Trend', line=dict(color='#FFA500', dash='dot')))
 
     if show_solar:
@@ -180,19 +176,18 @@ if not df.empty:
 
     fig1.update_layout(
         template="plotly_dark", height=400, margin=dict(t=20, b=20),
-        xaxis=dict(showticklabels=False),
-        yaxis=dict(title="River Depth (cm)", side="left"),
+        xaxis=dict(showticklabels=False), yaxis=dict(title="River Depth (cm)", side="left"),
         yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig1, use_container_width=True)
 
+    # ... (Plot 2, Plot 3, and Intelligence Section stay exactly the same) ...
     # Plot 2
     st.markdown("### ⚡ Velocity of Rise / Fall with Rainfall Overlay")
     fig_roc = go.Figure()
     if not rain_df.empty:
         fig_roc.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.2)', hovertemplate='Rain: %{y}mm'))
-
     fig_roc.add_trace(go.Scatter(x=df["timestamp"], y=df["roc"], name='RoC (cm/min)', line=dict(color='#FF4B4B', width=1.5), fill='tozeroy', fillcolor='rgba(255, 75, 75, 0.1)'))
     fig_roc.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
     fig_roc.update_layout(template="plotly_dark", height=300, margin=dict(t=10, b=10), xaxis=dict(title="Time"), yaxis=dict(title="Velocity (cm / min)", side="left"), yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False), showlegend=False)
@@ -206,7 +201,6 @@ if not df.empty:
     for i, day in enumerate(unique_days):
         day_df = df[df["date_label"] == day]
         fig2.add_trace(go.Scatter(x=day_df["time_of_day"], y=day_df["daily_pct"], mode='lines', name=day, line=dict(width=1, color=colors[i]), opacity=0.2, hoverinfo='skip'))
-    
     agg_trend = df.groupby(df["time_of_day"].round(1))["daily_pct"].mean().reset_index()
     fig2.add_trace(go.Scatter(x=agg_trend["time_of_day"], y=agg_trend["daily_pct"], name='Avg Trend', line=dict(color='red', width=4)))
     fig2.update_layout(template="plotly_dark", height=450, xaxis=dict(title="Hour of Day (0-24)", range=[0, 24]), yaxis=dict(title="Daily Range (%)"))
@@ -215,48 +209,30 @@ if not df.empty:
     # Intelligence Section
     st.markdown("---")
     st.header("🧠 Hydrological Catchment Intelligence")
-    
     lag_val = estimate_lag_time(df, rain_df)
     k_val = estimate_recession_index(df)
-    
     c1, c2 = st.columns(2)
     with c1:
         st.metric("Estimated Catchment Lag", f"{lag_val} Hours" if isinstance(lag_val, float) else lag_val)
-        st.caption("The delay between peak rainfall and the peak rate of river rise.")
+        st.caption("The delay between peak rainfall and peak river rise velocity.")
     with c2:
         st.metric("Recession Index (k)", f"{k_val}" if isinstance(k_val, float) else k_val)
         st.caption("The rate of drainage (higher = faster drainage).")
 
     with st.expander("📚 View Mathematical Definitions & Equations"):
         st.markdown("### 1. Catchment Lag Time")
-        st.write("""
-        The lag time represents the delay between the peak intensity of a rainfall event and the resulting peak response in the river. 
-        In this app, we define 'response' as the maximum **Rate of Change** (velocity of rise).
-        """)
         st.latex(r"T_{lag} = t_{RoC_{max}} - t_{Rain_{max}}")
-        st.info("Where $t$ is the timestamp. We search within 12 hours following significant rain.")
-
         st.markdown("### 2. Recession Constant ($k$)")
-        st.write("""
-        During dry periods, river depth decays exponentially as the catchment drains. 
-        This is modeled using the Baseflow Recession equation:
-        """)
         st.latex(r"h_t = h_0 \cdot e^{-kt}")
-        st.write("""
-        By analyzing the instantaneous rate of fall, we solve for $k$:
-        """)
         st.latex(r"k \approx \left| \frac{\Delta h / \Delta t}{\bar{h}} \right|")
-        st.write("""
-        - **High $k$ (> 0.01):** Flashy catchment; drains very quickly.
-        - **Low $k$ (< 0.002):** Slow drainage; supported by groundwater.
-        """)
+        st.markdown("### 3. Diurnal Anomaly")
+        st.latex(r"h_{anomaly}(t) = h_{actual}(t) - \bar{h}(\text{minute of day})")
 
     st.download_button("📥 Download View CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="nant_cledlyn.csv", mime="text/csv")
-    
     time.sleep(refresh_rate)
     st.rerun()
 
 else:
-    st.info("No river data found. Try a different date range.")
+    st.info("No river data found.")
     time.sleep(refresh_rate)
     st.rerun()
