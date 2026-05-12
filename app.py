@@ -85,7 +85,7 @@ today = datetime.now().date()
 date_range = st.sidebar.date_input("Select Date Range", value=(MIN_DATA_DATE, today), min_value=MIN_DATA_DATE, max_value=today)
 
 show_rain = st.sidebar.checkbox("Overlay Rainfall Data", value=True)
-show_diurnal_norm = st.sidebar.checkbox("Show Diurnal Normalized Depth", value=True)
+show_diurnal_adj = st.sidebar.checkbox("Show Diurnal Adjusted Depth (Stable)", value=True)
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
 refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", 5, 60, 10)
@@ -117,21 +117,26 @@ def fetch_filtered_data(dates):
         df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
         df = df.dropna(subset=['reading_value']).sort_values("timestamp").reset_index(drop=True)
         
-        # 1. Base Diurnal Percent Logic (0-100% of day's range)
+        # 1. Daily Stats for Percent Calc
         df["date_label"] = df["timestamp"].dt.date.astype(str)
         df["min_of_day"] = df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute
         daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
+        daily_stats["range"] = daily_stats["max"] - daily_stats["min"]
+        
+        # Merge stats back
         df = df.merge(daily_stats, on="date_label")
-        df["daily_pct"] = (df["reading_value"] - df["min"]) / (df["max"] - df["min"]) * 100
-        df.loc[df["max"] == df["min"], "daily_pct"] = 50.0 
+        
+        # Calculate daily percentage (0-100)
+        df["daily_pct"] = (df["reading_value"] - df["min"]) / df["range"] * 100
+        df.loc[df["range"] == 0, "daily_pct"] = 50.0 
 
-        # 2. DIURNAL NORMALIZATION (The request)
-        # Average diurnal percentage for every minute of day across whole view
+        # 2. STABLE DIURNAL ADJUSTMENT (Additive Offset)
+        avg_range = daily_stats["range"].mean()
         avg_diurnal_pct_map = df.groupby("min_of_day")["daily_pct"].transform("mean")
-        # Factor = Avg Pct / 50 (midpoint)
-        # We cap the map to avoid division by zero (though avg pct is rarely exactly 0)
-        df["normalization_factor"] = avg_diurnal_pct_map.clip(lower=1) / 50.0
-        df["normalized_depth"] = df["reading_value"] / df["normalization_factor"]
+        
+        # Offset (cm) = (Avg % for this minute - 50% midpoint) * Average Daily Range
+        df["diurnal_offset"] = ((avg_diurnal_pct_map - 50.0) / 100.0) * avg_range
+        df["adjusted_depth"] = df["reading_value"] - df["diurnal_offset"]
 
         # MATH: Rolling Average
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
@@ -166,8 +171,8 @@ if not df.empty:
 
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Actual Depth (cm)', line=dict(color='#33C3F0', width=2)))
     
-    if show_diurnal_norm:
-        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["normalized_depth"], name='Normalized Depth (Midpoint 50%)', line=dict(color='#C70039', width=1.5, dash='dash')))
+    if show_diurnal_adj:
+        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["adjusted_depth"], name='Diurnal Adjusted (Stable)', line=dict(color='#C70039', width=1.5, dash='dash')))
 
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Smooth Trend', line=dict(color='#FFA500', dash='dot')))
 
@@ -226,10 +231,11 @@ if not df.empty:
         st.latex(r"T_{lag} = t_{RoC_{max}} - t_{Rain_{max}}")
         st.markdown("### 2. Recession Constant ($k$)")
         st.latex(r"h_t = h_0 \cdot e^{-kt}")
-        st.markdown("### 3. Diurnal Normalization")
-        st.write("Adjusts values based on the typical percentage-of-range for that specific minute.")
-        st.latex(r"Factor(min) = \frac{\overline{Range\%}(min)}{50}")
-        st.latex(r"h_{normalized} = \frac{h_{actual}}{Factor(min)}")
+        st.latex(r"k \approx \left| \frac{\Delta h / \Delta t}{\bar{h}} \right|")
+        st.markdown("### 3. Diurnal Adjustment (Stable)")
+        st.write("Corrects for typical time-of-day fluctuations using a centimeter-based offset derived from historical range percentages.")
+        st.latex(r"Offset(min) = \left(\frac{\overline{Range\%}(min) - 50}{100}\right) \times \overline{DailyRange}")
+        st.latex(r"h_{adjusted} = h_{actual} - Offset(min)")
 
     st.download_button("📥 Download View CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="nant_cledlyn.csv", mime="text/csv")
     time.sleep(refresh_rate)
