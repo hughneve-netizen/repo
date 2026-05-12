@@ -85,7 +85,7 @@ today = datetime.now().date()
 date_range = st.sidebar.date_input("Select Date Range", value=(MIN_DATA_DATE, today), min_value=MIN_DATA_DATE, max_value=today)
 
 show_rain = st.sidebar.checkbox("Overlay Rainfall Data", value=True)
-show_diurnal_removed = st.sidebar.checkbox("Subtract Diurnal (Percentage Based)", value=True)
+show_diurnal_norm = st.sidebar.checkbox("Show Diurnal Normalized Depth", value=True)
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
 refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", 5, 60, 10)
@@ -117,6 +117,22 @@ def fetch_filtered_data(dates):
         df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
         df = df.dropna(subset=['reading_value']).sort_values("timestamp").reset_index(drop=True)
         
+        # 1. Base Diurnal Percent Logic (0-100% of day's range)
+        df["date_label"] = df["timestamp"].dt.date.astype(str)
+        df["min_of_day"] = df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute
+        daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
+        df = df.merge(daily_stats, on="date_label")
+        df["daily_pct"] = (df["reading_value"] - df["min"]) / (df["max"] - df["min"]) * 100
+        df.loc[df["max"] == df["min"], "daily_pct"] = 50.0 
+
+        # 2. DIURNAL NORMALIZATION (The request)
+        # Average diurnal percentage for every minute of day across whole view
+        avg_diurnal_pct_map = df.groupby("min_of_day")["daily_pct"].transform("mean")
+        # Factor = Avg Pct / 50 (midpoint)
+        # We cap the map to avoid division by zero (though avg pct is rarely exactly 0)
+        df["normalization_factor"] = avg_diurnal_pct_map.clip(lower=1) / 50.0
+        df["normalized_depth"] = df["reading_value"] / df["normalization_factor"]
+
         # MATH: Rolling Average
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
         
@@ -125,24 +141,7 @@ def fetch_filtered_data(dates):
         t_future, t_past = df["timestamp"].shift(-5), df["timestamp"].shift(5)
         df["roc"] = (val_future - val_past) / ((t_future - t_past).dt.total_seconds() / 60)
         
-        # MATH: Diurnal Subtraction (PERCENTAGE BASED)
-        df["date_label"] = df["timestamp"].dt.date.astype(str)
-        df["min_of_day"] = df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute
-        
-        # 1. Calculate the daily mean for each point
-        df["daily_mean"] = df.groupby("date_label")["reading_value"].transform("mean")
-        # 2. Calculate the ratio of the actual value to the daily mean
-        df["ratio_to_mean"] = df["reading_value"] / df["daily_mean"]
-        # 3. Create a map of the average ratio for every minute of the day
-        diurnal_ratio_map = df.groupby("min_of_day")["ratio_to_mean"].transform("mean")
-        # 4. Anomaly = Actual - (Daily Mean * Expected Diurnal Ratio)
-        df["anomaly_depth"] = df["reading_value"] - (df["daily_mean"] * diurnal_ratio_map)
-        
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60
-        daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
-        df = df.merge(daily_stats, on="date_label")
-        df["daily_pct"] = (df["reading_value"] - df["min"]) / (df["max"] - df["min"]) * 100
-        df.loc[df["max"] == df["min"], "daily_pct"] = 0 
         return df
     return pd.DataFrame()
 
@@ -167,8 +166,8 @@ if not df.empty:
 
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Actual Depth (cm)', line=dict(color='#33C3F0', width=2)))
     
-    if show_diurnal_removed:
-        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["anomaly_depth"], name='Anomaly (Diurnal Removed %)', line=dict(color='#C70039', width=0.5, dash='dot')))
+    if show_diurnal_norm:
+        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["normalized_depth"], name='Normalized Depth (Midpoint 50%)', line=dict(color='#C70039', width=1.5, dash='dash')))
 
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Smooth Trend', line=dict(color='#FFA500', dash='dot')))
 
@@ -227,10 +226,10 @@ if not df.empty:
         st.latex(r"T_{lag} = t_{RoC_{max}} - t_{Rain_{max}}")
         st.markdown("### 2. Recession Constant ($k$)")
         st.latex(r"h_t = h_0 \cdot e^{-kt}")
-        st.latex(r"k \approx \left| \frac{\Delta h / \Delta t}{\bar{h}} \right|")
-        st.markdown("### 3. Diurnal Anomaly (Percentage Based)")
-        st.write("Calculates the expected percentage variation for this time of day and subtracts it from the actual reading.")
-        st.latex(r"h_{anomaly}(t) = h_{actual}(t) - \left( \bar{h}_{day} \times \text{AvgRatio}(\text{min of day}) \right)")
+        st.markdown("### 3. Diurnal Normalization")
+        st.write("Adjusts values based on the typical percentage-of-range for that specific minute.")
+        st.latex(r"Factor(min) = \frac{\overline{Range\%}(min)}{50}")
+        st.latex(r"h_{normalized} = \frac{h_{actual}}{Factor(min)}")
 
     st.download_button("📥 Download View CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="nant_cledlyn.csv", mime="text/csv")
     time.sleep(refresh_rate)
