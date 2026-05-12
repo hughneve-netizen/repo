@@ -85,7 +85,7 @@ today = datetime.now().date()
 date_range = st.sidebar.date_input("Select Date Range", value=(MIN_DATA_DATE, today), min_value=MIN_DATA_DATE, max_value=today)
 
 show_rain = st.sidebar.checkbox("Overlay Rainfall Data", value=True)
-show_diurnal_removed = st.sidebar.checkbox("Subtract Diurnal Average", value=True)
+show_diurnal_removed = st.sidebar.checkbox("Subtract Diurnal (Percentage Based)", value=True)
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
 refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", 5, 60, 10)
@@ -125,15 +125,19 @@ def fetch_filtered_data(dates):
         t_future, t_past = df["timestamp"].shift(-5), df["timestamp"].shift(5)
         df["roc"] = (val_future - val_past) / ((t_future - t_past).dt.total_seconds() / 60)
         
-        # MATH: Diurnal Subtraction
-        # 1. Map each row to a 'minute of day' (0-1439)
-        df["min_of_day"] = df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute
-        # 2. Calculate average depth for every minute across the whole dataset
-        diurnal_map = df.groupby("min_of_day")["reading_value"].transform("mean")
-        # 3. Subtract it
-        df["anomaly_depth"] = df["reading_value"] - diurnal_map
-        
+        # MATH: Diurnal Subtraction (PERCENTAGE BASED)
         df["date_label"] = df["timestamp"].dt.date.astype(str)
+        df["min_of_day"] = df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute
+        
+        # 1. Calculate the daily mean for each point
+        df["daily_mean"] = df.groupby("date_label")["reading_value"].transform("mean")
+        # 2. Calculate the ratio of the actual value to the daily mean
+        df["ratio_to_mean"] = df["reading_value"] / df["daily_mean"]
+        # 3. Create a map of the average ratio for every minute of the day
+        diurnal_ratio_map = df.groupby("min_of_day")["ratio_to_mean"].transform("mean")
+        # 4. Anomaly = Actual - (Daily Mean * Expected Diurnal Ratio)
+        df["anomaly_depth"] = df["reading_value"] - (df["daily_mean"] * diurnal_ratio_map)
+        
         df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60
         daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
         df = df.merge(daily_stats, on="date_label")
@@ -164,7 +168,7 @@ if not df.empty:
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Actual Depth (cm)', line=dict(color='#33C3F0', width=2)))
     
     if show_diurnal_removed:
-        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["anomaly_depth"], name='Anomaly (Diurnal Removed)', line=dict(color='#C70039', width=1.5, dash='dash')))
+        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["anomaly_depth"], name='Anomaly (Diurnal Removed %)', line=dict(color='#C70039', width=1.5, dash='dash')))
 
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Smooth Trend', line=dict(color='#FFA500', dash='dot')))
 
@@ -182,7 +186,6 @@ if not df.empty:
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-    # ... (Plot 2, Plot 3, and Intelligence Section stay exactly the same) ...
     # Plot 2
     st.markdown("### ⚡ Velocity of Rise / Fall with Rainfall Overlay")
     fig_roc = go.Figure()
@@ -225,8 +228,9 @@ if not df.empty:
         st.markdown("### 2. Recession Constant ($k$)")
         st.latex(r"h_t = h_0 \cdot e^{-kt}")
         st.latex(r"k \approx \left| \frac{\Delta h / \Delta t}{\bar{h}} \right|")
-        st.markdown("### 3. Diurnal Anomaly")
-        st.latex(r"h_{anomaly}(t) = h_{actual}(t) - \bar{h}(\text{minute of day})")
+        st.markdown("### 3. Diurnal Anomaly (Percentage Based)")
+        st.write("Calculates the expected percentage variation for this time of day and subtracts it from the actual reading.")
+        st.latex(r"h_{anomaly}(t) = h_{actual}(t) - \left( \bar{h}_{day} \times \text{AvgRatio}(\text{min of day}) \right)")
 
     st.download_button("📥 Download View CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="nant_cledlyn.csv", mime="text/csv")
     time.sleep(refresh_rate)
