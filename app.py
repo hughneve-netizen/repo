@@ -150,7 +150,7 @@ def fetch_filtered_data(dates):
         return df
     return pd.DataFrame()
 
-# 4. UI Execution
+# 4. Main UI Execution
 st.title("🌊 Nant Cledlyn Water Level Analysis")
 st.subheader("by Hugh Neve")
 
@@ -169,7 +169,14 @@ if not df.empty:
         rain_max_val = max(rain_df["rainfall"].max() * 1.5, 5)
         fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
 
-    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["reading_value"], name='Actual Depth (cm)', line=dict(color='#33C3F0', width=2)))
+    # MODIFIED: Changed mode to 'markers' to show individual raw data points without connecting lines
+    fig1.add_trace(go.Scatter(
+        x=df["timestamp"], 
+        y=df["reading_value"], 
+        name='Actual Depth (cm)', 
+        mode='markers',
+        marker=dict(color='#33C3F0', size=4)
+    ))
     
     if show_diurnal_adj:
         fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["adjusted_depth"], name='Diurnal Adjusted (Stable)', line=dict(color='#C70039', width=1.5, dash='dash')))
