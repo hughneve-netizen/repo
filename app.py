@@ -175,7 +175,7 @@ if not df.empty:
         y=df["reading_value"], 
         name='Actual Depth (cm)', 
         mode='markers',
-        marker=dict(color='#33C3F0', size=4)
+        marker=dict(color='#33C3F0', size=2)
     ))
     
     if show_diurnal_adj:
