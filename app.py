@@ -126,12 +126,12 @@ def fetch_filtered_data(dates):
         # Merge stats back
         df = df.merge(daily_stats, on="date_label")
         
-        # Calculate daily percentage (0-100) used in the diurnal overlay chart
-        df["daily_pct"] = (df["reading_value"] - df["min"]) / daily_stats["range"].replace(0, 1) * 100
+        # FIX: Calculate daily percentage using the properly aligned df["range"]
+        df["daily_pct"] = (df["reading_value"] - df["min"]) / df["range"].replace(0, 1) * 100
         df.loc[df["range"] == 0, "daily_pct"] = 50.0 
 
-        # 2. DIURNAL ADJUSTMENT RATIO (As Requested)
-        # Look up the average percentage variation at this minute across the data set
+        # 2. DIURNAL ADJUSTMENT RATIO (Multiplicative Scaling)
+        # Look up the average percentage variation at this minute across the dataset
         avg_diurnal_pct_map = df.groupby("min_of_day")["daily_pct"].transform("mean")
         
         # Scale factor = (diurnal average at time of occurrence) / 50
