@@ -85,6 +85,7 @@ today = datetime.now().date()
 date_range = st.sidebar.date_input("Select Date Range", value=(MIN_DATA_DATE, today), min_value=MIN_DATA_DATE, max_value=today)
 
 show_rain = st.sidebar.checkbox("Overlay Rainfall Data", value=True)
+show_raw_data = st.sidebar.checkbox("Show Raw Data Points", value=True)  # NEW Checkbox
 show_diurnal_adj = st.sidebar.checkbox("Show Diurnal Adjusted Depth (Stable)", value=True)
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
@@ -126,16 +127,13 @@ def fetch_filtered_data(dates):
         daily_stats["range"] = daily_stats["max"] - daily_stats["min"]
         df = df.merge(daily_stats, on="date_label")
         
-        # Calculate daily percentage for the bottom visualization overlay chart
+        # Calculate daily percentage
         df["daily_pct"] = (df["reading_value"] - df["min"]) / df["range"].replace(0, 1) * 100
         df.loc[df["range"] == 0, "daily_pct"] = 50.0 
 
         # 2. SCIENTIFIC DIURNAL CORRECTION (Additive Centimeter-Based Subtraction)
-        # Find absolute centimeter deviation from that specific day's mean
         df["deviation_cm"] = df["reading_value"] - df["mean"]
-        # Find the average baseline centimeter trend for each minute across the whole timeframe
         avg_diurnal_cm_trend = df.groupby("min_of_day")["deviation_cm"].transform("mean")
-        # Subtract the typical background baseline wave from the actual depth reading
         df["adjusted_depth"] = df["reading_value"] - avg_diurnal_cm_trend
 
         # MATH: Rolling Average
@@ -169,14 +167,15 @@ if not df.empty:
         rain_max_val = max(rain_df["rainfall"].max() * 1.5, 5)
         fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
 
-    # Actual Depth shown cleanly as pure data points
-    fig1.add_trace(go.Scatter(
-        x=df["timestamp"], 
-        y=df["reading_value"], 
-        name='Actual Depth (cm)', 
-        mode='markers',
-        marker=dict(color='#33C3F0', size=4)
-    ))
+    # Modified: Conditional visibility for raw data markers
+    if show_raw_data:
+        fig1.add_trace(go.Scatter(
+            x=df["timestamp"], 
+            y=df["reading_value"], 
+            name='Actual Depth (cm)', 
+            mode='markers',
+            marker=dict(color='#33C3F0', size=4)
+        ))
     
     if show_diurnal_adj:
         fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["adjusted_depth"], name='Diurnal Adjusted (Stable)', line=dict(color='#C70039', width=1.5, dash='dash')))
