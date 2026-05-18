@@ -85,7 +85,7 @@ today = datetime.now().date()
 date_range = st.sidebar.date_input("Select Date Range", value=(MIN_DATA_DATE, today), min_value=MIN_DATA_DATE, max_value=today)
 
 show_rain = st.sidebar.checkbox("Overlay Rainfall Data", value=True)
-show_diurnal_adj = st.sidebar.checkbox("Show Diurnal Adjusted Depth", value=True)
+show_diurnal_adj = st.sidebar.checkbox("Show Diurnal Adjusted Depth (Stable)", value=True)
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
 refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", 5, 60, 10)
@@ -117,26 +117,26 @@ def fetch_filtered_data(dates):
         df["reading_value"] = pd.to_numeric(df["reading_value"], errors='coerce')
         df = df.dropna(subset=['reading_value']).sort_values("timestamp").reset_index(drop=True)
         
-        # 1. Daily Stats for Percent Calc
+        # 1. Base Time Mapping
         df["date_label"] = df["timestamp"].dt.date.astype(str)
         df["min_of_day"] = df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute
-        daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
-        daily_stats["range"] = daily_stats["max"] - daily_stats["min"]
         
+        # Calculate daily stats
+        daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max', 'mean']).reset_index()
+        daily_stats["range"] = daily_stats["max"] - daily_stats["min"]
         df = df.merge(daily_stats, on="date_label")
         
+        # Calculate daily percentage for the bottom visualization overlay chart
         df["daily_pct"] = (df["reading_value"] - df["min"]) / df["range"].replace(0, 1) * 100
         df.loc[df["range"] == 0, "daily_pct"] = 50.0 
 
-        # 2. DIURNAL ADJUSTMENT RATIO
-        avg_diurnal_pct_map = df.groupby("min_of_day")["daily_pct"].transform("mean")
-        diurnal_factor = avg_diurnal_pct_map.clip(lower=0.1) / 50.0
-        df["adjusted_depth"] = df["reading_value"] / diurnal_factor
-
-        # FIX 1: Eliminate mathematical anomalies where division by near-zero exploded values
-        max_actual = df["reading_value"].max()
-        min_actual = df["reading_value"].min()
-        df.loc[(df["adjusted_depth"] > max_actual * 1.3) | (df["adjusted_depth"] < min_actual * 0.7), "adjusted_depth"] = None
+        # 2. SCIENTIFIC DIURNAL CORRECTION (Additive Centimeter-Based Subtraction)
+        # Find absolute centimeter deviation from that specific day's mean
+        df["deviation_cm"] = df["reading_value"] - df["mean"]
+        # Find the average baseline centimeter trend for each minute across the whole timeframe
+        avg_diurnal_cm_trend = df.groupby("min_of_day")["deviation_cm"].transform("mean")
+        # Subtract the typical background baseline wave from the actual depth reading
+        df["adjusted_depth"] = df["reading_value"] - avg_diurnal_cm_trend
 
         # MATH: Rolling Average
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
@@ -169,7 +169,7 @@ if not df.empty:
         rain_max_val = max(rain_df["rainfall"].max() * 1.5, 5)
         fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
 
-    # Actual Depth shown as pure data points (markers mode)
+    # Actual Depth shown cleanly as pure data points
     fig1.add_trace(go.Scatter(
         x=df["timestamp"], 
         y=df["reading_value"], 
@@ -179,7 +179,7 @@ if not df.empty:
     ))
     
     if show_diurnal_adj:
-        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["adjusted_depth"], name='Diurnal Adjusted', line=dict(color='#C70039', width=1.5, dash='dash')))
+        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["adjusted_depth"], name='Diurnal Adjusted (Stable)', line=dict(color='#C70039', width=1.5, dash='dash')))
 
     fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Smooth Trend', line=dict(color='#FFA500', dash='dot')))
 
@@ -189,7 +189,6 @@ if not df.empty:
         fig1.add_trace(go.Scatter(x=sunrises, y=[y_max_val]*len(sunrises), mode='markers', name='Sunrise', marker=dict(symbol='triangle-up', size=8, color='#FFD700'), hoverinfo='skip'))
         fig1.add_trace(go.Scatter(x=sunsets, y=[y_max_val]*len(sunsets), mode='markers', name='Sunset', marker=dict(symbol='triangle-down', size=8, color='#FF4500'), hoverinfo='skip'))
 
-    # FIX 2: Explicitly force the main Y-axis scale to lock onto the actual depth boundaries
     fig1.update_layout(
         template="plotly_dark", height=400, margin=dict(t=20, b=20),
         xaxis=dict(showticklabels=False), 
@@ -241,10 +240,10 @@ if not df.empty:
         st.markdown("### 2. Recession Constant ($k$)")
         st.latex(r"h_t = h_0 \cdot e^{-kt}")
         st.latex(r"k \approx \left| \frac{\Delta h / \Delta t}{\bar{h}} \right|")
-        st.markdown("### 3. Diurnal Normalization Factor")
-        st.write("Scales the actual value based on the historical expected variation for that minute relative to the 50% midpoint.")
-        st.latex(r"\text{Factor}(t) = \frac{\overline{\text{Daily\%}}(t)}{50}")
-        st.latex(r"h_{\text{adjusted}} = \frac{h_{\text{actual}}}{\text{Factor}(t)}")
+        st.markdown("### 3. Diurnal Adjustment (Stable Residual Subtraction)")
+        st.write("Isolates the absolute centimeter deviation from the day's mean to create an expected baseline wave, avoiding dangerous division artifacts.")
+        st.latex(r"\Delta h(t) = h_{\text{actual}}(t) - \bar{h}_{\text{day}}")
+        st.latex(r"h_{\text{adjusted}}(t) = h_{\text{actual}}(t) - \overline{\Delta h}(\text{minute of day})")
 
     st.download_button("📥 Download View CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="nant_cledlyn.csv", mime="text/csv")
     time.sleep(refresh_rate)
