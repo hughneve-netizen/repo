@@ -123,22 +123,20 @@ def fetch_filtered_data(dates):
         daily_stats = df.groupby("date_label")["reading_value"].agg(['min', 'max']).reset_index()
         daily_stats["range"] = daily_stats["max"] - daily_stats["min"]
         
-        # Merge stats back
         df = df.merge(daily_stats, on="date_label")
         
-        # FIX: Calculate daily percentage using the properly aligned df["range"]
         df["daily_pct"] = (df["reading_value"] - df["min"]) / df["range"].replace(0, 1) * 100
         df.loc[df["range"] == 0, "daily_pct"] = 50.0 
 
-        # 2. DIURNAL ADJUSTMENT RATIO (Multiplicative Scaling)
-        # Look up the average percentage variation at this minute across the dataset
+        # 2. DIURNAL ADJUSTMENT RATIO
         avg_diurnal_pct_map = df.groupby("min_of_day")["daily_pct"].transform("mean")
-        
-        # Scale factor = (diurnal average at time of occurrence) / 50
         diurnal_factor = avg_diurnal_pct_map.clip(lower=0.1) / 50.0
-        
-        # Correct the depth point: Adjusted = Actual / Factor
         df["adjusted_depth"] = df["reading_value"] / diurnal_factor
+
+        # FIX 1: Eliminate mathematical anomalies where division by near-zero exploded values
+        max_actual = df["reading_value"].max()
+        min_actual = df["reading_value"].min()
+        df.loc[(df["adjusted_depth"] > max_actual * 1.3) | (df["adjusted_depth"] < min_actual * 0.7), "adjusted_depth"] = None
 
         # MATH: Rolling Average
         df["rolling_avg"] = df["reading_value"].rolling(window=window_size, win_type='gaussian', center=True, min_periods=1).mean(std=window_size/4)
@@ -191,9 +189,11 @@ if not df.empty:
         fig1.add_trace(go.Scatter(x=sunrises, y=[y_max_val]*len(sunrises), mode='markers', name='Sunrise', marker=dict(symbol='triangle-up', size=8, color='#FFD700'), hoverinfo='skip'))
         fig1.add_trace(go.Scatter(x=sunsets, y=[y_max_val]*len(sunsets), mode='markers', name='Sunset', marker=dict(symbol='triangle-down', size=8, color='#FF4500'), hoverinfo='skip'))
 
+    # FIX 2: Explicitly force the main Y-axis scale to lock onto the actual depth boundaries
     fig1.update_layout(
         template="plotly_dark", height=400, margin=dict(t=20, b=20),
-        xaxis=dict(showticklabels=False), yaxis=dict(title="River Depth (cm)", side="left"),
+        xaxis=dict(showticklabels=False), 
+        yaxis=dict(title="River Depth (cm)", side="left", range=[df["reading_value"].min() * 0.9, df["reading_value"].max() * 1.15]),
         yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
