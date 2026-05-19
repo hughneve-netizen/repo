@@ -90,7 +90,6 @@ show_diurnal_adj = st.sidebar.checkbox("Show Diurnal Adjusted Depth (Stable)", v
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
 
-# UPDATED: Extended slider from 60 to 180 seconds
 refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", 60, 180, 60)
 
 if st.sidebar.button("🔄 Force Refresh Data"):
@@ -189,10 +188,10 @@ if not df.empty:
         fig1.add_trace(go.Scatter(x=sunrises, y=[y_max_val]*len(sunrises), mode='markers', name='Sunrise', marker=dict(symbol='triangle-up', size=8, color='#FFD700'), hoverinfo='skip'))
         fig1.add_trace(go.Scatter(x=sunsets, y=[y_max_val]*len(sunsets), mode='markers', name='Sunset', marker=dict(symbol='triangle-down', size=8, color='#FF4500'), hoverinfo='skip'))
 
-    # UPDATED: Changed xaxis to visible/labeled and setup synchronized 'matches="x1"'
+    # FIX: Removed the invalid `id="x1"` parameter. Primary X-axis is referenced automatically as "x".
     fig1.update_layout(
         template="plotly_dark", height=400, margin=dict(t=20, b=20),
-        xaxis=dict(title="Time", showticklabels=True, id="x1"), 
+        xaxis=dict(title="Time", showticklabels=True), 
         yaxis=dict(title="River Depth (cm)", side="left", range=[df["reading_value"].min() * 0.9, df["reading_value"].max() * 1.15]),
         yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
@@ -207,10 +206,10 @@ if not df.empty:
     fig_roc.add_trace(go.Scatter(x=df["timestamp"], y=df["roc"], name='RoC (cm/min)', line=dict(color='#FF4B4B', width=1.5), fill='tozeroy', fillcolor='rgba(255, 75, 75, 0.1)'))
     fig_roc.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
     
-    # UPDATED: Configured xaxis to match and track x1 from chart 1
+    # FIX: Configured `matches="x"` to sync directly to the primary layout of Chart 1
     fig_roc.update_layout(
         template="plotly_dark", height=300, margin=dict(t=10, b=10), 
-        xaxis=dict(title="Time", matches="x1"), 
+        xaxis=dict(title="Time", matches="x"), 
         yaxis=dict(title="Velocity (cm / min)", side="left"), 
         yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False), 
         showlegend=False
