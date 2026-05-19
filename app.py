@@ -85,11 +85,13 @@ today = datetime.now().date()
 date_range = st.sidebar.date_input("Select Date Range", value=(MIN_DATA_DATE, today), min_value=MIN_DATA_DATE, max_value=today)
 
 show_rain = st.sidebar.checkbox("Overlay Rainfall Data", value=True)
-show_raw_data = st.sidebar.checkbox("Show Raw Data Points", value=True)  # NEW Checkbox
+show_raw_data = st.sidebar.checkbox("Show Raw Data Points", value=True)
 show_diurnal_adj = st.sidebar.checkbox("Show Diurnal Adjusted Depth (Stable)", value=True)
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
-refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", 5, 60, 10)
+
+# UPDATED: Extended slider from 60 to 180 seconds
+refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", 60, 180, 60)
 
 if st.sidebar.button("🔄 Force Refresh Data"):
     st.cache_data.clear()
@@ -131,7 +133,7 @@ def fetch_filtered_data(dates):
         df["daily_pct"] = (df["reading_value"] - df["min"]) / df["range"].replace(0, 1) * 100
         df.loc[df["range"] == 0, "daily_pct"] = 50.0 
 
-        # 2. SCIENTIFIC DIURNAL CORRECTION (Additive Centimeter-Based Subtraction)
+        # 2. SCIENTIFIC DIURNAL CORRECTION
         df["deviation_cm"] = df["reading_value"] - df["mean"]
         avg_diurnal_cm_trend = df.groupby("min_of_day")["deviation_cm"].transform("mean")
         df["adjusted_depth"] = df["reading_value"] - avg_diurnal_cm_trend
@@ -167,7 +169,6 @@ if not df.empty:
         rain_max_val = max(rain_df["rainfall"].max() * 1.5, 5)
         fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
 
-    # Modified: Conditional visibility for raw data markers
     if show_raw_data:
         fig1.add_trace(go.Scatter(
             x=df["timestamp"], 
@@ -188,9 +189,10 @@ if not df.empty:
         fig1.add_trace(go.Scatter(x=sunrises, y=[y_max_val]*len(sunrises), mode='markers', name='Sunrise', marker=dict(symbol='triangle-up', size=8, color='#FFD700'), hoverinfo='skip'))
         fig1.add_trace(go.Scatter(x=sunsets, y=[y_max_val]*len(sunsets), mode='markers', name='Sunset', marker=dict(symbol='triangle-down', size=8, color='#FF4500'), hoverinfo='skip'))
 
+    # UPDATED: Changed xaxis to visible/labeled and setup synchronized 'matches="x1"'
     fig1.update_layout(
         template="plotly_dark", height=400, margin=dict(t=20, b=20),
-        xaxis=dict(showticklabels=False), 
+        xaxis=dict(title="Time", showticklabels=True, id="x1"), 
         yaxis=dict(title="River Depth (cm)", side="left", range=[df["reading_value"].min() * 0.9, df["reading_value"].max() * 1.15]),
         yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
@@ -204,7 +206,15 @@ if not df.empty:
         fig_roc.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.2)', hovertemplate='Rain: %{y}mm'))
     fig_roc.add_trace(go.Scatter(x=df["timestamp"], y=df["roc"], name='RoC (cm/min)', line=dict(color='#FF4B4B', width=1.5), fill='tozeroy', fillcolor='rgba(255, 75, 75, 0.1)'))
     fig_roc.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
-    fig_roc.update_layout(template="plotly_dark", height=300, margin=dict(t=10, b=10), xaxis=dict(title="Time"), yaxis=dict(title="Velocity (cm / min)", side="left"), yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False), showlegend=False)
+    
+    # UPDATED: Configured xaxis to match and track x1 from chart 1
+    fig_roc.update_layout(
+        template="plotly_dark", height=300, margin=dict(t=10, b=10), 
+        xaxis=dict(title="Time", matches="x1"), 
+        yaxis=dict(title="Velocity (cm / min)", side="left"), 
+        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False), 
+        showlegend=False
+    )
     st.plotly_chart(fig_roc, use_container_width=True)
 
     # Plot 3
