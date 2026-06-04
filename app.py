@@ -43,15 +43,15 @@ def estimate_recession_index(df):
     return "Steady/Rising"
 
 # --- RAINFALL FETCHING ---
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_rainfall_data(dates):
     lat, lon = 52.0505, -4.3444 
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&timezone=GMT&past_days=31&forecast_days=1"
     
-    max_retries = 3
+    max_retries = 2
     for attempt in range(max_retries):
         try:
-            r = requests.get(url, timeout=30)
+            r = requests.get(url, timeout=15)
             r.raise_for_status()
             
             hourly = r.json().get('hourly', {})
@@ -75,7 +75,7 @@ def fetch_rainfall_data(dates):
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:
-                st.error("⚠️ Rainfall API Rate Limit Reached: Open-Meteo requires a short cooldown. Please try again in 15-30 minutes.")
+                st.error("⚠️ Rainfall API Rate Limit Reached: Please try again in 15 minutes.")
             else:
                 st.error(f"⚠️ Rainfall API Error: HTTP {e.response.status_code}")
             return pd.DataFrame()
@@ -85,7 +85,7 @@ def fetch_rainfall_data(dates):
                 time.sleep(2)
                 continue
             else:
-                st.error("⚠️ Rainfall API Error: The Open-Meteo server is responding too slowly right now. Try refreshing in a few minutes.")
+                st.error("⚠️ Rainfall API Error: The Open-Meteo server timed out.")
                 return pd.DataFrame()
                 
         except Exception as e: 
@@ -124,7 +124,6 @@ show_diurnal_adj = st.sidebar.checkbox("Show Diurnal Adjusted Depth (Stable)", v
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
 
-# UPDATED: Refresh rate slider configured for 300s to 1800s in 60s increments
 refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", min_value=300, max_value=1800, value=300, step=60)
 
 if st.sidebar.button("🔄 Force Refresh Data"):
@@ -192,13 +191,18 @@ st.subheader("by Hugh Neve")
 st.markdown("""
 Welcome to the Nant Cledlyn Water Level Analysis dashboard. 
 
-This data shows the approximate depth of the Nant Cledyn at Drefach, where it runs through our land.  Measurements are taken approximately every twenty minutes using an ultrasonic distance sensor and produce the average of ten individual measurements.  The averaged value is then passed via a mesh radio network to a receiver that filters out any unrealistic spikes before sending it to this page.  This is not a permanent installation and the sensor is mounted to a sturdy branch overhanging the water.  This gives rise to diurnal variations as the turgidity of the tree's cells is affected by daytime transpiration and nocturnal 'refilling'.  Rainfall data allows the hydrological characteristics to be estimated.
+*Insert your plain text introduction here. You can use this space to describe the purpose of the dashboard, details about the Nant Cledlyn catchment, or instructions on how to use the analytical tools below.*
 """)
 st.markdown("---")
 # -----------------------------
 
 df = fetch_filtered_data(date_range)
-rain_df = fetch_rainfall_data(date_range) if show_rain else pd.DataFrame()
+
+if show_rain:
+    with st.spinner("☁️ Fetching live rainfall data from Open-Meteo..."):
+        rain_df = fetch_rainfall_data(date_range)
+else:
+    rain_df = pd.DataFrame()
 
 if not df.empty:
     latest_time = df.iloc[-1]["timestamp"].strftime("%d %b %Y, %H:%M")
