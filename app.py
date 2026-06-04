@@ -124,8 +124,6 @@ show_diurnal_adj = st.sidebar.checkbox("Show Diurnal Adjusted Depth (Stable)", v
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
 window_size = st.sidebar.slider("Trend Smoothing", 1, 100, 20)
 
-refresh_rate = st.sidebar.slider("Auto-Refresh (secs)", min_value=300, max_value=1800, value=300, step=60)
-
 if st.sidebar.button("🔄 Force Refresh Data"):
     st.cache_data.clear()
     st.rerun()
@@ -141,7 +139,7 @@ def fetch_paginated_data(query_builder):
         offset += page_size
     return pd.DataFrame(all_rows)
 
-@st.cache_data(ttl=refresh_rate)
+@st.cache_data
 def fetch_filtered_data(dates):
     if not isinstance(dates, (list, tuple)) or len(dates) != 2: return pd.DataFrame()
     start_dt, end_dt = datetime.combine(dates[0], datetime.min.time()).isoformat(), datetime.combine(dates[1], datetime.max.time()).isoformat()
@@ -300,10 +298,6 @@ if not df.empty:
         st.latex(r"h_{\text{adjusted}}(t) = h_{\text{actual}}(t) - \overline{\Delta h}(\text{minute of day})")
 
     st.download_button("📥 Download View CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="nant_cledlyn.csv", mime="text/csv")
-    time.sleep(refresh_rate)
-    st.rerun()
 
 else:
     st.info("No river data found.")
-    time.sleep(refresh_rate)
-    st.rerun()
