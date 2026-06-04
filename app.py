@@ -43,20 +43,38 @@ def estimate_recession_index(df):
     return "Steady/Rising"
 
 # --- RAINFALL FETCHING ---
+# --- RAINFALL FETCHING ---
 @st.cache_data(ttl=3600)
 def fetch_rainfall_data(dates):
     lat, lon = 52.0505, -4.3444 
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&timezone=GMT&past_days=31&forecast_days=1"
+    
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
         hourly = r.json().get('hourly', {})
-        if not hourly: return pd.DataFrame()
-        temp_df = pd.DataFrame({"timestamp": pd.to_datetime(hourly.get('time')), "rainfall": hourly.get('precipitation', [])})
+        if not hourly: 
+            st.warning("Rainfall API connected, but returned no data.")
+            return pd.DataFrame()
+            
+        temp_df = pd.DataFrame({
+            "timestamp": pd.to_datetime(hourly.get('time')), 
+            "rainfall": hourly.get('precipitation', [])
+        })
         temp_df['timestamp'] = temp_df['timestamp'].dt.tz_localize(None)
+        
+        # Filter to selected dates
         mask = (temp_df['timestamp'].dt.date >= dates[0]) & (temp_df['timestamp'].dt.date <= dates[1])
-        return temp_df.loc[mask].copy()
-    except: return pd.DataFrame()
+        final_df = temp_df.loc[mask].copy()
+        
+        if final_df.empty:
+            st.info("Rainfall data fetched, but none falls within your selected Date Range.")
+            
+        return final_df
+        
+    except Exception as e: 
+        st.error(f"⚠️ Rainfall API Error: {e}")
+        return pd.DataFrame()
 
 # --- SOLAR CALCULATION ---
 def get_solar_events(start_date, end_date):
