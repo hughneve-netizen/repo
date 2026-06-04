@@ -49,32 +49,45 @@ def fetch_rainfall_data(dates):
     lat, lon = 52.0505, -4.3444 
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&timezone=GMT&past_days=31&forecast_days=1"
     
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        hourly = r.json().get('hourly', {})
-        if not hourly: 
-            st.warning("Rainfall API connected, but returned no data.")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Increased timeout to 30 seconds
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            
+            hourly = r.json().get('hourly', {})
+            if not hourly: 
+                st.warning("Rainfall API connected, but returned no data.")
+                return pd.DataFrame()
+                
+            temp_df = pd.DataFrame({
+                "timestamp": pd.to_datetime(hourly.get('time')), 
+                "rainfall": hourly.get('precipitation', [])
+            })
+            temp_df['timestamp'] = temp_df['timestamp'].dt.tz_localize(None)
+            
+            # Filter to selected dates
+            mask = (temp_df['timestamp'].dt.date >= dates[0]) & (temp_df['timestamp'].dt.date <= dates[1])
+            final_df = temp_df.loc[mask].copy()
+            
+            if final_df.empty:
+                st.info("Rainfall data fetched, but none falls within your selected Date Range.")
+                
+            return final_df
+            
+        except requests.exceptions.ReadTimeout:
+            # If it times out, wait 2 seconds and try again (unless we're out of retries)
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            else:
+                st.error("⚠️ Rainfall API Error: The Open-Meteo server is responding too slowly right now. Try refreshing in a few minutes.")
+                return pd.DataFrame()
+                
+        except Exception as e: 
+            st.error(f"⚠️ Rainfall API Error: {e}")
             return pd.DataFrame()
-            
-        temp_df = pd.DataFrame({
-            "timestamp": pd.to_datetime(hourly.get('time')), 
-            "rainfall": hourly.get('precipitation', [])
-        })
-        temp_df['timestamp'] = temp_df['timestamp'].dt.tz_localize(None)
-        
-        # Filter to selected dates
-        mask = (temp_df['timestamp'].dt.date >= dates[0]) & (temp_df['timestamp'].dt.date <= dates[1])
-        final_df = temp_df.loc[mask].copy()
-        
-        if final_df.empty:
-            st.info("Rainfall data fetched, but none falls within your selected Date Range.")
-            
-        return final_df
-        
-    except Exception as e: 
-        st.error(f"⚠️ Rainfall API Error: {e}")
-        return pd.DataFrame()
 
 # --- SOLAR CALCULATION ---
 def get_solar_events(start_date, end_date):
