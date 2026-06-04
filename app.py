@@ -11,6 +11,8 @@ import requests
 # 1. Page Configuration
 st.set_page_config(page_title="Nant Cledlyn Monitor", page_icon="🌊", layout="wide")
 
+st.write("Welcome to the Nant Cledlyn Water Level Analysis dashboard. Insert your plain text introduction here.")
+
 # 2. Database Connection
 conn = st.connection("supabase", type=SupabaseConnection)
 
