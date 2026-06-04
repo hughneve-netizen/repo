@@ -153,6 +153,15 @@ def fetch_filtered_data(dates):
 st.title("🌊 Nant Cledlyn Water Level Analysis")
 st.subheader("by Hugh Neve")
 
+# --- INTRODUCTION SECTION ---
+st.markdown("""
+Welcome to the Nant Cledlyn Water Level Analysis dashboard. 
+
+This data shows the approximate depth of the Nant Cledyn at Drefach, where it runs through our land.  Measurements are taken approximately every twenty minutes using an ultrasonic distance sensor and produce the average of ten individual measurements.  The averaged value is then passed via a mesh radio network to a receiver that filters out any unrealistic spikes before sending it to this page.  This is not a permanent installation and the sensor is mounted to a sturdy branch overhanging the water.  This gives rise to diurnal variations as the turgidity of the tree's cells is affected by daytime transpiration and nocturnal 'refilling'.  Rainfall data allows the hydrological characteristics to be estimated.
+""")
+st.markdown("---")
+# -----------------------------
+
 df = fetch_filtered_data(date_range)
 rain_df = fetch_rainfall_data(date_range) if show_rain else pd.DataFrame()
 
