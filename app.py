@@ -243,3 +243,4 @@ if df is not None and not df.empty:
         yaxis=dict(title="River Depth (cm)", side="left", range=[df["reading_value"].min() * 0.9, df["reading_value"].max() * 1.15]),
         yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    ) # <-- This final parenthesis is usually what goes missing!
