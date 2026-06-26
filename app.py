@@ -190,10 +190,11 @@ st.markdown("""
 Welcome to the Nant Cledlyn Water Level Analysis dashboard. 
 
 This data shows the approximate depth of the Nant Cledyn at Drefach, where it runs through our land.  Measurements are taken approximately every twenty minutes using an ultrasonic distance sensor and produce the average of ten individual measurements.  The averaged value is then passed via a mesh radio network to a receiver that filters out any unrealistic spikes before sending it to this page.  This is not a permanent installation and the sensor is mounted to a sturdy branch overhanging the water.  This gives rise to diurnal variations as the turgidity of the tree's cells is affected by daytime transpiration and nocturnal 'refilling'.  Rainfall data allows the hydrological characteristics to be estimated.   Select 'Force Refresh Data' to get the latest data.
+Why is there a step-change at the end of May 2026?  The sensor had to be moved because of nesting ducks.  I didn't adjust the offsets applied to the measurements - silly me.
 """)
 st.markdown("---")
 # -----------------------------
-
+st.image("https://drive.google.com/file/d/1TC56yrQGa-tl4R9keHAN2UrdyqbP3xVC/view?usp=sharing", caption="System Architecture")
 df = fetch_filtered_data(date_range)
 
 if show_rain:
