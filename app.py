@@ -194,7 +194,7 @@ Why is there a step-change at the end of May 2026?  The sensor had to be moved b
 """)
 st.markdown("---")
 # -----------------------------
-st.markdown"![image](https://www.image2url.com/r2/default/images/1782482058110-2fb58607-7bc0-49dd-b0d7-b0146b6f99e7.png)"
+st.markdown("![image](https://www.image2url.com/r2/default/images/1782482058110-2fb58607-7bc0-49dd-b0d7-b0146b6f99e7.png)")
 
 if show_rain:
     with st.spinner("☁️ Fetching live rainfall data from Open-Meteo..."):
