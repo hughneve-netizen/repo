@@ -189,19 +189,23 @@ st.subheader("by Hugh Neve")
 st.markdown("""
 Welcome to the Nant Cledlyn Water Level Analysis dashboard. 
 
-This data shows the approximate depth of the Nant Cledyn at Drefach, where it runs through our land.  Measurements are taken approximately every twenty minutes using an ultrasonic distance sensor and produce the average of ten individual measurements.  The averaged value is then passed via a mesh radio network to a receiver that filters out any unrealistic spikes before sending it to this page.  This is not a permanent installation and the sensor is mounted to a sturdy branch overhanging the water.  This gives rise to diurnal variations as the turgidity of the tree's cells is affected by daytime transpiration and nocturnal 'refilling'.  Rainfall data allows the hydrological characteristics to be estimated.   Select 'Force Refresh Data' to get the latest data.
-Why is there a step-change at the end of May 2026?  The sensor had to be moved because of nesting ducks.  I didn't adjust the offsets applied to the measurements - silly me.
+This data shows the approximate depth of the Nant Cledyn at Drefach, where it runs through our land. Measurements are taken approximately every twenty minutes using an ultrasonic distance sensor and produce the average of ten individual measurements. The averaged value is then passed via a mesh radio network to a receiver that filters out any unrealistic spikes before sending it to this page. This is not a permanent installation and the sensor is mounted to a sturdy branch overhanging the water. This gives rise to diurnal variations as the turgidity of the tree's cells is affected by daytime transpiration and nocturnal 'refilling'. Rainfall data allows the hydrological characteristics to be estimated. Select 'Force Refresh Data' to get the latest data.
+Why is there a step-change at the end of May 2026? The sensor had to be moved because of nesting ducks. I didn't adjust the offsets applied to the measurements - silly me.
 """)
 st.markdown("---")
 # -----------------------------
 st.image("schem.png")
+
+# Fetch Data
+df = fetch_filtered_data(date_range)
+
 if show_rain:
     with st.spinner("☁️ Fetching live rainfall data from Open-Meteo..."):
         rain_df = fetch_rainfall_data(date_range)
 else:
     rain_df = pd.DataFrame()
 
-if not df.empty:
+if df is not None and not df.empty:
     latest_time = df.iloc[-1]["timestamp"].strftime("%d %b %Y, %H:%M")
     st.info(f"🕒 **Last Update:** {latest_time} UTC | Records Viewable: {len(df):,}")
 
@@ -239,64 +243,3 @@ if not df.empty:
         yaxis=dict(title="River Depth (cm)", side="left", range=[df["reading_value"].min() * 0.9, df["reading_value"].max() * 1.15]),
         yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    st.plotly_chart(fig1, use_container_width=True)
-
-    # Plot 2
-    st.markdown("### ⚡ Velocity of Rise / Fall with Rainfall Overlay")
-    fig_roc = go.Figure()
-    if not rain_df.empty:
-        fig_roc.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.2)', hovertemplate='Rain: %{y}mm'))
-    fig_roc.add_trace(go.Scatter(x=df["timestamp"], y=df["roc"], name='RoC (cm/min)', line=dict(color='#FF4B4B', width=1.5), fill='tozeroy', fillcolor='rgba(255, 75, 75, 0.1)'))
-    fig_roc.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
-    
-    fig_roc.update_layout(
-        template="plotly_dark", height=300, margin=dict(t=10, b=10), 
-        xaxis=dict(title="Time", matches="x"), 
-        yaxis=dict(title="Velocity (cm / min)", side="left"), 
-        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False), 
-        showlegend=False
-    )
-    st.plotly_chart(fig_roc, use_container_width=True)
-
-    # Plot 3
-    st.markdown("### 🕒 Diurnal Overlay (%)")
-    fig2 = go.Figure()
-    unique_days = sorted(df["date_label"].unique())
-    colors = px.colors.sample_colorscale("Viridis", [i/(len(unique_days) or 1) for i in range(len(unique_days))])
-    for i, day in enumerate(unique_days):
-        day_df = df[df["date_label"] == day]
-        fig2.add_trace(go.Scatter(x=day_df["time_of_day"], y=day_df["daily_pct"], mode='lines', name=day, line=dict(width=1, color=colors[i]), opacity=0.2, hoverinfo='skip'))
-    agg_trend = df.groupby(df["time_of_day"].round(1))["daily_pct"].mean().reset_index()
-    fig2.add_trace(go.Scatter(x=agg_trend["time_of_day"], y=agg_trend["daily_pct"], name='Avg Trend', line=dict(color='red', width=4)))
-    fig2.update_layout(template="plotly_dark", height=450, xaxis=dict(title="Hour of Day (0-24)", range=[0, 24]), yaxis=dict(title="Daily Range (%)"))
-    st.plotly_chart(fig2, use_container_width=True)
-
-    # Intelligence Section
-    st.markdown("---")
-    st.header("🧠 Hydrological Catchment Intelligence")
-    lag_val = estimate_lag_time(df, rain_df)
-    k_val = estimate_recession_index(df)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("Estimated Catchment Lag", f"{lag_val} Hours" if isinstance(lag_val, float) else lag_val)
-        st.caption("The delay between peak rainfall and peak river rise velocity.")
-    with c2:
-        st.metric("Recession Index (k)", f"{k_val}" if isinstance(k_val, float) else k_val)
-        st.caption("The rate of drainage (higher = faster drainage).")
-
-    with st.expander("📚 View Mathematical Definitions & Equations"):
-        st.markdown("### 1. Catchment Lag Time")
-        st.latex(r"T_{lag} = t_{RoC_{max}} - t_{Rain_{max}}")
-        st.markdown("### 2. Recession Constant ($k$)")
-        st.latex(r"h_t = h_0 \cdot e^{-kt}")
-        st.latex(r"k \approx \left| \frac{\Delta h / \Delta t}{\bar{h}} \right|")
-        st.markdown("### 3. Diurnal Adjustment (Stable Residual Subtraction)")
-        st.write("Isolates the absolute centimeter deviation from the day's mean to create an expected baseline wave, avoiding dangerous division artifacts.")
-        st.latex(r"\Delta h(t) = h_{\text{actual}}(t) - \bar{h}_{\text{day}}")
-        st.latex(r"h_{\text{adjusted}}(t) = h_{\text{actual}}(t) - \overline{\Delta h}(\text{minute of day})")
-
-    st.download_button("📥 Download View CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="nant_cledlyn.csv", mime="text/csv")
-
-else:
-    st.info("No river data found.")
