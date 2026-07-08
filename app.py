@@ -189,8 +189,8 @@ st.subheader("by Hugh Neve")
 st.markdown("""
 Welcome to the Nant Cledlyn Water Level Analysis dashboard. 
 
-This data shows the approximate depth of the Nant Cledyn at Drefach, where it runs through our land.  Measurements are taken approximately every twenty minutes using an ultrasonic distance sensor and produce the average of ten individual measurements.  The averaged value is then passed via a mesh radio network to a receiver that filters out any unrealistic spikes before sending it to this page.  This is not a permanent installation and the sensor is mounted to a sturdy branch overhanging the water.  This gives rise to diurnal variations as the turgidity of the tree's cells is affected by daytime transpiration and nocturnal 'refilling'.  Rainfall data allows the hydrological characteristics to be estimated.   Select 'Force Refresh Data' to get the latest data.
-The step change at the end of May 2026 is due to a repositioning of the sensor to avoid disturbing the nest of a duck.  The software was not updated with a new offset - silly me.
+This data shows the approximate depth of the Nant Cledyn at Drefach, where it runs through our land. Measurements are taken approximately every twenty minutes using an ultrasonic distance sensor and produce the average of ten individual measurements. The averaged value is then passed via a mesh radio network to a receiver that filters out any unrealistic spikes before sending it to this page. This is not a permanent installation and the sensor is mounted to a sturdy branch overhanging the water. This gives rise to diurnal variations as the turgidity of the tree's cells is affected by daytime transpiration and nocturnal 'refilling'. Rainfall data allows the hydrological characteristics to be estimated.  Select 'Force Refresh Data' to get the latest data.
+The step change at the end of May 2026 is due to a repositioning of the sensor to avoid disturbing the nest of a duck. The software was not updated with a new offset - silly me.
 """)
 st.markdown("---")
 # -----------------------------
@@ -273,6 +273,26 @@ if not df.empty:
     fig2.add_trace(go.Scatter(x=agg_trend["time_of_day"], y=agg_trend["daily_pct"], name='Avg Trend', line=dict(color='red', width=4)))
     fig2.update_layout(template="plotly_dark", height=450, xaxis=dict(title="Hour of Day (0-24)", range=[0, 24]), yaxis=dict(title="Daily Range (%)"))
     st.plotly_chart(fig2, use_container_width=True)
+
+    # Plot 4 (NEW) - Depth Histogram
+    st.markdown("### 📊 Depth Distribution")
+    fig_hist = go.Figure(data=[
+        go.Histogram(
+            x=df["reading_value"], 
+            nbinsx=30, 
+            marker_color='#33C3F0', 
+            opacity=0.75
+        )
+    ])
+    fig_hist.update_layout(
+        template="plotly_dark", 
+        height=350, 
+        margin=dict(t=20, b=20),
+        xaxis_title="River Depth (cm)", 
+        yaxis_title="Frequency",
+        bargap=0.05
+    )
+    st.plotly_chart(fig_hist, use_container_width=True)
 
     # Intelligence Section
     st.markdown("---")
