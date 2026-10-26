@@ -20,7 +20,7 @@ def estimate_lag_time(df, rain_df):
     sig_rain = rain_df[rain_df['rainfall'] > 0.5].copy()
     if sig_rain.empty: return "No heavy rain in view"
     sig_rain['timestamp'] = sig_rain['timestamp'].dt.tz_localize(None)
-    rain_peak_time = sig_rain.loc[sig_rain['rainfall'].idxmax(), 'timestamp']
+    rain_peak_time = sig_rain.loc[sig_rain[''].idxmax(), 'timestamp']
     df_compare = df.copy()
     df_compare['timestamp'] = df_compare['timestamp'].dt.tz_localize(None)
     response_window = df_compare[(df_compare['timestamp'] > rain_peak_time) & 
@@ -118,7 +118,7 @@ MIN_DATA_DATE = datetime(2026, 4, 11).date()
 today = datetime.now().date()
 date_range = st.sidebar.date_input("Select Date Range", value=(MIN_DATA_DATE, today), min_value=MIN_DATA_DATE, max_value=today)
 
-show_rain = st.sidebar.checkbox("Overlay Rainfall Data", value=True)
+show_rain = st.sidebar.checkbox("Overlay Rainfall Data (last 30 days)", value=True)
 show_raw_data = st.sidebar.checkbox("Show Raw Data Points", value=True)
 show_diurnal_adj = st.sidebar.checkbox("Show Diurnal Adjusted Depth (Stable)", value=True)
 show_solar = st.sidebar.checkbox("Show Sunrise/Sunset", value=True)
