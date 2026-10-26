@@ -146,4 +146,119 @@ def fetch_filtered_data(dates):
         # MATH: Rate of Change
         val_future, val_past = df["reading_value"].shift(-5), df["reading_value"].shift(5)
         t_future, t_past = df["timestamp"].shift(-5), df["timestamp"].shift(5)
-        df["roc"] = (val_future - val_past) / ((t_future - t_past).dt.total_seconds() /
+        df["roc"] = (val_future - val_past) / ((t_future - t_past).dt.total_seconds() / 60)
+        
+        df["time_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute/60
+        return df
+    return pd.DataFrame()
+
+# 4. Main UI Execution
+st.title("🌊 Nant Cledlyn Water Level Analysis")
+st.subheader("by Hugh Neve")
+
+df = fetch_filtered_data(date_range)
+rain_df = fetch_rainfall_data(date_range) if show_rain else pd.DataFrame()
+
+if not df.empty:
+    latest_time = df.iloc[-1]["timestamp"].strftime("%d %b %Y, %H:%M")
+    st.info(f"🕒 **Last Update:** {latest_time} UTC | Records Viewable: {len(df):,}")
+
+    # Plot 1
+    st.markdown("### 📈 Chronological Depth & Rainfall")
+    fig1 = go.Figure()
+    rain_max_val = 5
+    if not rain_df.empty:
+        rain_max_val = max(rain_df["rainfall"].max() * 1.5, 5)
+        fig1.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.4)', hovertemplate='Rain: %{y}mm'))
+
+    if show_raw_data:
+        fig1.add_trace(go.Scatter(
+            x=df["timestamp"], 
+            y=df["reading_value"], 
+            name='Actual Depth (cm)', 
+            mode='markers',
+            marker=dict(color='#33C3F0', size=4)
+        ))
+    
+    if show_diurnal_adj:
+        fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["adjusted_depth"], name='Diurnal Adjusted (Stable)', line=dict(color='#C70039', width=1.5, dash='dash')))
+
+    fig1.add_trace(go.Scatter(x=df["timestamp"], y=df["rolling_avg"], name='Smooth Trend', line=dict(color='#FFA500', dash='dot')))
+
+    if show_solar:
+        sunrises, sunsets = get_solar_events(date_range[0], date_range[1])
+        y_max_val = df["reading_value"].max() * 1.05
+        fig1.add_trace(go.Scatter(x=sunrises, y=[y_max_val]*len(sunrises), mode='markers', name='Sunrise', marker=dict(symbol='triangle-up', size=8, color='#FFD700'), hoverinfo='skip'))
+        fig1.add_trace(go.Scatter(x=sunsets, y=[y_max_val]*len(sunsets), mode='markers', name='Sunset', marker=dict(symbol='triangle-down', size=8, color='#FF4500'), hoverinfo='skip'))
+
+    fig1.update_layout(
+        template="plotly_dark", height=400, margin=dict(t=20, b=20),
+        xaxis=dict(title="Time", showticklabels=True), 
+        yaxis=dict(title="River Depth (cm)", side="left", range=[df["reading_value"].min() * 0.9, df["reading_value"].max() * 1.15]),
+        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig1, width="stretch")
+
+    # Plot 2
+    st.markdown("### ⚡ Velocity of Rise / Fall with Rainfall Overlay")
+    fig_roc = go.Figure()
+    if not rain_df.empty:
+        fig_roc.add_trace(go.Bar(x=rain_df["timestamp"], y=rain_df["rainfall"], name='Rain (mm)', yaxis='y2', marker_color='rgba(100, 149, 237, 0.2)', hovertemplate='Rain: %{y}mm'))
+    fig_roc.add_trace(go.Scatter(x=df["timestamp"], y=df["roc"], name='RoC (cm/min)', line=dict(color='#FF4B4B', width=1.5), fill='tozeroy', fillcolor='rgba(255, 75, 75, 0.1)'))
+    fig_roc.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
+    
+    fig_roc.update_layout(
+        template="plotly_dark", height=300, margin=dict(t=10, b=10), 
+        xaxis=dict(title="Time", matches="x"), 
+        yaxis=dict(title="Velocity (cm / min)", side="left"), 
+        yaxis2=dict(title="Rainfall (mm)", overlaying='y', side='right', range=[rain_max_val, 0], showgrid=False), 
+        showlegend=False
+    )
+    st.plotly_chart(fig_roc, width="stretch")
+
+    # Plot 3
+    st.markdown("### 🕒 Diurnal Overlay (%)")
+    fig2 = go.Figure()
+    unique_days = sorted(df["date_label"].unique())
+    colors = px.colors.sample_colorscale("Viridis", [i/(len(unique_days) or 1) for i in range(len(unique_days))])
+    for i, day in enumerate(unique_days):
+        day_df = df[df["date_label"] == day]
+        fig2.add_trace(go.Scatter(x=day_df["time_of_day"], y=day_df["daily_pct"], mode='lines', name=day, line=dict(width=1, color=colors[i]), opacity=0.2, hoverinfo='skip'))
+    agg_trend = df.groupby(df["time_of_day"].round(1))["daily_pct"].mean().reset_index()
+    fig2.add_trace(go.Scatter(x=agg_trend["time_of_day"], y=agg_trend["daily_pct"], name='Avg Trend', line=dict(color='red', width=4)))
+    fig2.update_layout(template="plotly_dark", height=450, xaxis=dict(title="Hour of Day (0-24)", range=[0, 24]), yaxis=dict(title="Daily Range (%)"))
+    st.plotly_chart(fig2, width="stretch")
+
+    # Intelligence Section
+    st.markdown("---")
+    st.header("🧠 Hydrological Catchment Intelligence")
+    lag_val = estimate_lag_time(df, rain_df)
+    k_val = estimate_recession_index(df)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Estimated Catchment Lag", f"{lag_val} Hours" if isinstance(lag_val, float) else lag_val)
+        st.caption("The delay between peak rainfall and peak river rise velocity.")
+    with c2:
+        st.metric("Recession Index (k)", f"{k_val}" if isinstance(k_val, float) else k_val)
+        st.caption("The rate of drainage (higher = faster drainage).")
+
+    with st.expander("📚 View Mathematical Definitions & Equations"):
+        st.markdown("### 1. Catchment Lag Time")
+        st.latex(r"T_{lag} = t_{RoC_{max}} - t_{Rain_{max}}")
+        st.markdown("### 2. Recession Constant ($k$)")
+        st.latex(r"h_t = h_0 \cdot e^{-kt}")
+        st.latex(r"k \approx \left| \frac{\Delta h / \Delta t}{\bar{h}} \right|")
+        st.markdown("### 3. Diurnal Adjustment (Stable Residual Subtraction)")
+        st.write("Isolates the absolute centimeter deviation from the day's mean to create an expected baseline wave, avoiding dangerous division artifacts.")
+        st.latex(r"\Delta h(t) = h_{\text{actual}}(t) - \bar{h}_{\text{day}}")
+        st.latex(r"h_{\text{adjusted}}(t) = h_{\text{actual}}(t) - \overline{\Delta h}(\text{minute of day})")
+
+    st.download_button("📥 Download View CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="nant_cledlyn.csv", mime="text/csv")
+    time.sleep(refresh_rate)
+    st.rerun()
+
+else:
+    st.info("No river data found.")
+    time.sleep(refresh_rate)
+    st.rerun()
